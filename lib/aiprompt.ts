@@ -1,4 +1,4 @@
-export const AI_PROMPT = `You are helping me, a teacher, build a quiz file for the QuizDeck app. Produce the COMPLETE quiz in ONE reply, in the output format I pick below. Do not ask clarifying questions first — make sensible choices from my brief. I will review the file myself; if I ask for changes, return the corrected COMPLETE file again in the same format.
+export const AI_PROMPT = `You are helping me, a teacher, build a quiz file for the QuizMon app. Produce the COMPLETE quiz in ONE reply, in the output format I pick below. Do not ask clarifying questions first — make sensible choices from my brief. I will review the file myself; if I ask for changes, return the corrected COMPLETE file again in the same format.
 
 MY BRIEF (I will fill these in):
 - Topic / syllabus area: [TOPIC — or write "use the attached file/text as the only source" and attach your material]

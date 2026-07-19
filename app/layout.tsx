@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "QuizDeck",
+  title: "QuizMon",
   description:
     "Upload an AI-generated question file, get a beautiful auto-graded quiz your students can take from any device.",
 };
