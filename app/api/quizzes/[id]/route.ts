@@ -20,7 +20,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   const quiz = await ownedQuiz(id, owner);
   if (!quiz) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const attempts = await q(
-    `SELECT id, student, answers, per_question, score, max_score, flags, status, started_at, submitted_at
+    `SELECT id, student, group_info, answers, per_question, score, max_score, flags, status, started_at, submitted_at
        FROM attempts WHERE quiz_id = $1 AND status = 'submitted'
       ORDER BY submitted_at ASC`,
     [id]

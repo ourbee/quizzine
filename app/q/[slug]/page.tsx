@@ -30,6 +30,9 @@ interface PublicQuiz {
     shuffleQuestions: boolean;
     shuffleOptions: boolean;
     allowMultiple: boolean;
+    groupMode?: boolean;
+    groupMin?: number;
+    groupMax?: number;
   };
   questionCount: number;
   totalPoints: number;
@@ -58,6 +61,8 @@ export default function StudentQuizPage() {
   const [name, setName] = useState("");
   const [roll, setRoll] = useState("");
   const [semester, setSemester] = useState("");
+  const [groupName, setGroupName] = useState("");
+  const [members, setMembers] = useState<{ name: string; roll: string }[]>([]);
   const [startError, setStartError] = useState("");
   const [starting, setStarting] = useState(false);
 
@@ -86,6 +91,10 @@ export default function StudentQuizPage() {
       }
       const data: PublicQuiz = await res.json();
       setQuiz(data);
+      if (data.settings.groupMode) {
+        const n = data.settings.groupMin ?? 1;
+        setMembers(Array.from({ length: n }, () => ({ name: "", roll: "" })));
+      }
 
       const savedReview = localStorage.getItem(reviewKey);
       if (savedReview) {
@@ -198,10 +207,13 @@ export default function StudentQuizPage() {
     if (!quiz) return;
     setStarting(true);
     setStartError("");
+    const payload = quiz.settings.groupMode
+      ? { slug, group: { name: groupName, semester: Number(semester), members } }
+      : { slug, name, roll, semester: Number(semester) };
     const res = await fetch("/api/attempts/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slug, name, roll, semester: Number(semester) }),
+      body: JSON.stringify(payload),
     });
     setStarting(false);
     const data = await res.json().catch(() => ({}));
@@ -249,7 +261,16 @@ export default function StudentQuizPage() {
         <main className="max-w-2xl mx-auto">
           <div className="rounded-2xl border p-6 text-center shadow-sm print-page" style={cardStyle}>
             <p className="text-sm font-medium" style={{ color: theme.muted }}>{review.quizTitle}</p>
-            <h1 className="mt-1 text-xl font-bold">{review.student.name} · {review.student.rollNorm} · Sem {review.student.semester}</h1>
+            {review.group ? (
+              <>
+                <h1 className="mt-1 text-xl font-bold">{review.group.name} · Sem {review.group.semester}</h1>
+                <p className="mt-1 text-sm" style={{ color: theme.muted }}>
+                  {review.group.members.map((m) => `${m.name} (${m.roll})`).join(" · ")}
+                </p>
+              </>
+            ) : (
+              <h1 className="mt-1 text-xl font-bold">{review.student.name} · {review.student.rollNorm} · Sem {review.student.semester}</h1>
+            )}
             <p className="mt-4 text-5xl font-bold" style={{ color: theme.accent }}>
               {review.score}<span className="text-2xl font-semibold" style={{ color: theme.muted }}> / {review.max}</span>
             </p>
@@ -376,6 +397,12 @@ export default function StudentQuizPage() {
             <Media url={quiz.introMedia} />
             <ul className="mt-4 text-sm space-y-1" style={{ color: theme.muted }}>
               <li>• {quiz.questionCount} questions · {quiz.totalPoints} points</li>
+              {s.groupMode && (
+                <li>
+                  • Group quiz — one submission per group of{" "}
+                  {s.groupMin === s.groupMax ? s.groupMin : `${s.groupMin}–${s.groupMax}`} members
+                </li>
+              )}
               {s.timerMode === "quiz" && s.maxMinutes && <li>• Time limit: {s.maxMinutes} minutes from when you start</li>}
               {s.timerMode === "question" && s.perQuestionSeconds && (
                 <li>• {s.perQuestionSeconds} seconds per question, one at a time — you cannot go back</li>
@@ -390,39 +417,121 @@ export default function StudentQuizPage() {
               </p>
             ) : (
               <form onSubmit={start} className="mt-6 space-y-3">
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Full name"
-                  required
-                  className="w-full rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
-                  style={{ borderColor: theme.border }}
-                />
-                <div className="flex gap-3">
-                  <input
-                    value={roll}
-                    onChange={(e) => setRoll(e.target.value.replace(/\D/g, ""))}
-                    placeholder="Class roll number"
-                    inputMode="numeric"
-                    pattern="[0-9]+"
-                    title="Digits only"
-                    required
-                    className="flex-1 rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
-                    style={{ borderColor: theme.border }}
-                  />
-                  <select
-                    value={semester}
-                    onChange={(e) => setSemester(e.target.value)}
-                    required
-                    className="rounded-lg border px-3 py-2.5 bg-white text-slate-900"
-                    style={{ borderColor: theme.border }}
-                  >
-                    <option value="">Semester</option>
-                    {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-                      <option key={n} value={n}>Sem {n}</option>
+                {s.groupMode ? (
+                  <>
+                    <input
+                      value={groupName}
+                      onChange={(e) => setGroupName(e.target.value)}
+                      placeholder="Group name"
+                      required
+                      className="w-full rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
+                      style={{ borderColor: theme.border }}
+                    />
+                    <div className="flex gap-3">
+                      <label className="flex-1 text-sm" style={{ color: theme.muted }}>
+                        Members in your group
+                        <select
+                          value={members.length}
+                          onChange={(e) => {
+                            const n = Number(e.target.value);
+                            setMembers((m) =>
+                              Array.from({ length: n }, (_, i) => m[i] ?? { name: "", roll: "" })
+                            );
+                          }}
+                          className="mt-1 w-full rounded-lg border px-3 py-2.5 bg-white text-slate-900"
+                          style={{ borderColor: theme.border }}
+                        >
+                          {Array.from(
+                            { length: (s.groupMax ?? 1) - (s.groupMin ?? 1) + 1 },
+                            (_, i) => (s.groupMin ?? 1) + i
+                          ).map((n) => (
+                            <option key={n} value={n}>{n}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex-1 text-sm" style={{ color: theme.muted }}>
+                        Semester
+                        <select
+                          value={semester}
+                          onChange={(e) => setSemester(e.target.value)}
+                          required
+                          className="mt-1 w-full rounded-lg border px-3 py-2.5 bg-white text-slate-900"
+                          style={{ borderColor: theme.border }}
+                        >
+                          <option value="">Semester</option>
+                          {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                            <option key={n} value={n}>Sem {n}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    {members.map((m, i) => (
+                      <div key={i} className="flex gap-3">
+                        <input
+                          value={m.name}
+                          onChange={(e) =>
+                            setMembers((arr) => arr.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
+                          }
+                          placeholder={`Member ${i + 1} full name`}
+                          required
+                          className="flex-[2] rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
+                          style={{ borderColor: theme.border }}
+                        />
+                        <input
+                          value={m.roll}
+                          onChange={(e) =>
+                            setMembers((arr) =>
+                              arr.map((x, j) => (j === i ? { ...x, roll: e.target.value.replace(/\D/g, "") } : x))
+                            )
+                          }
+                          placeholder="Roll number"
+                          inputMode="numeric"
+                          pattern="[0-9]+"
+                          title="Digits only"
+                          required
+                          className="flex-1 min-w-0 rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
+                          style={{ borderColor: theme.border }}
+                        />
+                      </div>
                     ))}
-                  </select>
-                </div>
+                  </>
+                ) : (
+                  <>
+                    <input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Full name"
+                      required
+                      className="w-full rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
+                      style={{ borderColor: theme.border }}
+                    />
+                    <div className="flex gap-3">
+                      <input
+                        value={roll}
+                        onChange={(e) => setRoll(e.target.value.replace(/\D/g, ""))}
+                        placeholder="Class roll number"
+                        inputMode="numeric"
+                        pattern="[0-9]+"
+                        title="Digits only"
+                        required
+                        className="flex-1 rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
+                        style={{ borderColor: theme.border }}
+                      />
+                      <select
+                        value={semester}
+                        onChange={(e) => setSemester(e.target.value)}
+                        required
+                        className="rounded-lg border px-3 py-2.5 bg-white text-slate-900"
+                        style={{ borderColor: theme.border }}
+                      >
+                        <option value="">Semester</option>
+                        {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                          <option key={n} value={n}>Sem {n}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
                 {startError && <p className="text-sm text-red-600">{startError}</p>}
                 <button type="submit" disabled={starting} className="w-full rounded-lg py-3 font-semibold disabled:opacity-50" style={accentBtn}>
                   {starting ? "Starting…" : "Start quiz"}

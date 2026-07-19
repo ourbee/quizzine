@@ -63,6 +63,9 @@ export default function NewQuizPage() {
   const [closesAt, setClosesAt] = useState("");
   const [allowMultiple, setAllowMultiple] = useState(false);
   const [introMedia, setIntroMedia] = useState("");
+  const [groupMode, setGroupMode] = useState(false);
+  const [groupMin, setGroupMin] = useState("2");
+  const [groupMax, setGroupMax] = useState("5");
 
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState("");
@@ -129,6 +132,14 @@ export default function NewQuizPage() {
   }
 
   async function publish() {
+    if (groupMode) {
+      const lo = Number(groupMin);
+      const hi = Number(groupMax);
+      if (!(lo >= 1) || !(hi >= lo)) {
+        setPublishError("Group size limits must be at least 1, with the upper limit not below the lower limit.");
+        return;
+      }
+    }
     setPublishing(true);
     setPublishError("");
     const res = await fetch("/api/quizzes", {
@@ -148,6 +159,9 @@ export default function NewQuizPage() {
           perQuestionSeconds: timerMode === "question" ? Number(perQuestionSeconds) : undefined,
           closesAt: closesAt ? new Date(closesAt).toISOString() : undefined,
           allowMultiple,
+          groupMode,
+          groupMin: groupMode ? Number(groupMin) : undefined,
+          groupMax: groupMode ? Number(groupMax) : undefined,
         },
       }),
     });
@@ -185,9 +199,9 @@ export default function NewQuizPage() {
           <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
             <p className="text-sm text-blue-900 font-medium">Workflow</p>
             <p className="text-sm text-blue-800 mt-1">
-              1. Copy the AI prompt below into ChatGPT, Claude or Gemini (attach your source material if any). 2. Upload
-              or paste the file it returns. 3. Review everything in the preview here — ask the AI for a corrected file if
-              something is off.
+              1. Copy the AI prompt below into ChatGPT, Claude or Gemini (attach your source material if any). 2. Edit
+              the questions on device if needed, then upload or paste the file it returns. 3. Review everything in the
+              preview here — ask the AI for a corrected file if something is off.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button onClick={copyPrompt} className="rounded-lg bg-blue-700 px-4 py-2 text-sm text-white font-semibold hover:bg-blue-800">
@@ -362,6 +376,40 @@ export default function NewQuizPage() {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+            <p className="font-semibold text-slate-900 text-sm">Submission type</p>
+            <div className="flex flex-wrap gap-2 text-sm">
+              {([[false, "Individual"], [true, "Group work"]] as [boolean, string][]).map(([mode, label]) => (
+                <button
+                  key={label}
+                  onClick={() => setGroupMode(mode)}
+                  className={`rounded-lg px-4 py-2 font-medium ${groupMode === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {groupMode ? (
+              <div className="text-sm text-slate-700 space-y-2">
+                <div className="flex flex-wrap gap-4">
+                  <label>
+                    Minimum members per group:{" "}
+                    <input type="number" min={1} value={groupMin} onChange={(e) => setGroupMin(e.target.value)} className="ml-2 w-20 rounded-lg border border-slate-300 px-3 py-1.5" />
+                  </label>
+                  <label>
+                    Maximum members per group:{" "}
+                    <input type="number" min={1} value={groupMax} onChange={(e) => setGroupMax(e.target.value)} className="ml-2 w-20 rounded-lg border border-slate-300 px-3 py-1.5" />
+                  </label>
+                </div>
+                <p className="text-xs text-slate-500">
+                  One member submits for the whole group. They enter the group name, semester, and every member&apos;s name and roll number before starting.
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">Each student submits their own attempt with their name, roll number and semester.</p>
+            )}
           </div>
 
           <div className="grid sm:grid-cols-2 gap-4">

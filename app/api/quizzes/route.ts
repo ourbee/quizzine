@@ -36,6 +36,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Question ${i + 1}: correct answer does not match its options.` }, { status: 400 });
     }
   }
+  const groupMode = !!body.settings?.groupMode;
+  const groupMin = groupMode ? Math.min(50, Math.max(1, Math.floor(Number(body.settings?.groupMin)) || 1)) : undefined;
+  const groupMax = groupMode ? Math.min(50, Math.max(groupMin ?? 1, Math.floor(Number(body.settings?.groupMax)) || groupMin || 1)) : undefined;
   const settings: QuizSettings = {
     shuffleQuestions: !!body.settings?.shuffleQuestions,
     shuffleOptions: !!body.settings?.shuffleOptions,
@@ -44,6 +47,9 @@ export async function POST(req: NextRequest) {
     perQuestionSeconds: Number(body.settings?.perQuestionSeconds) > 0 ? Number(body.settings.perQuestionSeconds) : undefined,
     closesAt: body.settings?.closesAt || undefined,
     allowMultiple: !!body.settings?.allowMultiple,
+    groupMode,
+    groupMin,
+    groupMax,
   };
   const id = genId();
   const slug = slugify(body.title);

@@ -15,12 +15,12 @@ export default function Home() {
       <div className="text-center">
         <p className="text-sm font-semibold tracking-widest text-blue-700 uppercase">QuizMon</p>
         <h1 className="mt-3 text-4xl sm:text-5xl font-bold tracking-tight text-slate-900">
-          From AI-generated questions
+          From your questions
           <br className="hidden sm:block" /> to a live quiz in one upload.
         </h1>
         <p className="mt-4 text-lg text-slate-600 max-w-2xl mx-auto">
-          A Google Forms alternative built for teachers: draft questions with any AI tool, upload the file, share a
-          link or QR code — students get an auto-graded quiz with real feedback.
+          A Google Forms alternative built for teachers: draft questions with any AI tool, review and edit locally if
+          needed, upload the file, share a link or QR code — students get an auto-graded quiz with real feedback.
         </p>
         <div className="mt-8 flex items-center justify-center gap-4">
           <Link
@@ -29,14 +29,6 @@ export default function Home() {
           >
             Teacher dashboard
           </Link>
-          <a
-            href="https://github.com/ourbee"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rounded-lg border border-slate-300 px-6 py-3 font-semibold text-slate-700 hover:bg-slate-100 transition"
-          >
-            GitHub
-          </a>
         </div>
         <p className="mt-3 text-sm text-slate-500">Students only need the quiz link — no account, nothing to install.</p>
       </div>

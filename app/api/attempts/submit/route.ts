@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { grade } from "@/lib/grade";
-import type { AttemptFlags, PerQuestionResult, Question, QuizSettings, ReviewPayload, StudentInfo } from "@/lib/types";
+import type { AttemptFlags, GroupInfo, PerQuestionResult, Question, QuizSettings, ReviewPayload, StudentInfo } from "@/lib/types";
 
 const GRACE_MS = 45_000; // network/clock grace before a submission is flagged late
 
@@ -13,6 +13,7 @@ export async function POST(req: NextRequest) {
     id: string;
     quiz_id: string;
     student: StudentInfo;
+    group_info: GroupInfo | null;
     status: string;
     started_at: string;
     submitted_at: string | null;
@@ -39,6 +40,7 @@ export async function POST(req: NextRequest) {
       quizTitle: quiz.title,
       theme: quiz.theme,
       student: attempt.student,
+      group: attempt.group_info ?? undefined,
       questions,
       per: attempt.per_question,
       score: attempt.score ?? 0,
@@ -76,6 +78,7 @@ export async function POST(req: NextRequest) {
     quizTitle: quiz.title,
     theme: quiz.theme,
     student: attempt.student,
+    group: attempt.group_info ?? undefined,
     questions,
     per,
     score,

@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
-import type { AttemptFlags, PerQuestionResult, Question, QuizSettings, StudentInfo } from "@/lib/types";
+import type { AttemptFlags, GroupInfo, PerQuestionResult, Question, QuizSettings, StudentInfo } from "@/lib/types";
 
 interface QuizRow {
   id: string;
@@ -22,6 +22,7 @@ interface QuizRow {
 interface AttemptRow {
   id: string;
   student: StudentInfo;
+  group_info: GroupInfo | null;
   answers: Record<string, string> | null;
   per_question: PerQuestionResult[] | null;
   score: number | null;
@@ -66,13 +67,22 @@ export default function QuizDetailPage() {
     if (quizUrl) QRCode.toDataURL(quizUrl, { width: 480, margin: 1 }).then(setQr);
   }, [quizUrl]);
 
-  const duplicateKeys = useMemo(() => {
-    const seen = new Map<string, number>();
+  // Attempt ids that share a roll number (any member's, for group quizzes) with another attempt.
+  const duplicateIds = useMemo(() => {
+    const byKey = new Map<string, string[]>();
     for (const a of attempts) {
-      const key = `${a.student.rollNorm}|${a.student.semester}`;
-      seen.set(key, (seen.get(key) ?? 0) + 1);
+      const keys = a.group_info
+        ? a.group_info.members.map((m) => `${m.roll}|${a.group_info!.semester}`)
+        : [`${a.student.rollNorm}|${a.student.semester}`];
+      for (const key of new Set(keys)) {
+        byKey.set(key, [...(byKey.get(key) ?? []), a.id]);
+      }
     }
-    return new Set([...seen.entries()].filter(([, n]) => n > 1).map(([k]) => k));
+    const dups = new Set<string>();
+    for (const ids of byKey.values()) {
+      if (ids.length > 1) ids.forEach((id) => dups.add(id));
+    }
+    return dups;
   }, [attempts]);
 
   const analysis = useMemo(() => {
@@ -119,17 +129,26 @@ export default function QuizDetailPage() {
     if (!quiz) return;
     const qs = quiz.questions;
     const rows = attempts.map((a) => {
-      const row: Record<string, unknown> = {
-        Name: a.student.name,
-        RollNumber: a.student.rollNorm,
-        Semester: a.student.semester,
+      const row: Record<string, unknown> = a.group_info
+        ? {
+            GroupName: a.group_info.name,
+            Members: a.group_info.members.map((m) => `${m.name} (${m.roll})`).join(", "),
+            MemberCount: a.group_info.members.length,
+            Semester: a.group_info.semester,
+          }
+        : {
+            Name: a.student.name,
+            RollNumber: a.student.rollNorm,
+            Semester: a.student.semester,
+          };
+      Object.assign(row, {
         Score: a.score ?? 0,
         MaxScore: a.max_score ?? 0,
         Percent: a.max_score ? Math.round(((a.score ?? 0) / a.max_score) * 1000) / 10 : 0,
         Late: a.flags?.late ? "YES" : "",
-        Duplicate: duplicateKeys.has(`${a.student.rollNorm}|${a.student.semester}`) ? "YES" : "",
+        Duplicate: duplicateIds.has(a.id) ? "YES" : "",
         SubmittedAt: new Date(a.submitted_at).toLocaleString(),
-      };
+      });
       qs.forEach((qn, i) => {
         const per = a.per_question?.find((p) => p.qid === qn.id);
         const ans = per?.answer ?? "";
@@ -209,7 +228,7 @@ export default function QuizDetailPage() {
         {[
           ["Responses", String(attempts.length)],
           ["Average score", attempts.length ? `${Math.round(avg * 10) / 10} / ${attempts[0]?.max_score ?? ""}` : "—"],
-          ["Flagged", String(attempts.filter((a) => a.flags?.late || duplicateKeys.has(`${a.student.rollNorm}|${a.student.semester}`)).length)],
+          ["Flagged", String(attempts.filter((a) => a.flags?.late || duplicateIds.has(a.id)).length)],
         ].map(([label, value]) => (
           <div key={label} className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-2xl font-bold text-slate-900">{value}</p>
@@ -236,8 +255,8 @@ export default function QuizDetailPage() {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs text-slate-500">
                 <tr>
-                  <th className="px-4 py-2.5">Name</th>
-                  <th className="px-4 py-2.5">Roll</th>
+                  <th className="px-4 py-2.5">{quiz.settings.groupMode ? "Group" : "Name"}</th>
+                  <th className="px-4 py-2.5">{quiz.settings.groupMode ? "Members" : "Roll"}</th>
                   <th className="px-4 py-2.5">Sem</th>
                   <th className="px-4 py-2.5">Score</th>
                   <th className="px-4 py-2.5">Submitted</th>
@@ -246,16 +265,16 @@ export default function QuizDetailPage() {
               </thead>
               <tbody>
                 {attempts.map((a) => {
-                  const dup = duplicateKeys.has(`${a.student.rollNorm}|${a.student.semester}`);
+                  const dup = duplicateIds.has(a.id);
                   return (
                     <tr
                       key={a.id}
                       onClick={() => setExpanded(expanded === a.id ? null : a.id)}
                       className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer"
                     >
-                      <td className="px-4 py-2.5 font-medium text-slate-900">{a.student.name}</td>
-                      <td className="px-4 py-2.5">{a.student.rollNorm}</td>
-                      <td className="px-4 py-2.5">{a.student.semester}</td>
+                      <td className="px-4 py-2.5 font-medium text-slate-900">{a.group_info ? a.group_info.name : a.student.name}</td>
+                      <td className="px-4 py-2.5">{a.group_info ? `${a.group_info.members.length} members` : a.student.rollNorm}</td>
+                      <td className="px-4 py-2.5">{a.group_info ? a.group_info.semester : a.student.semester}</td>
                       <td className="px-4 py-2.5 font-semibold">{a.score ?? 0} / {a.max_score ?? 0}</td>
                       <td className="px-4 py-2.5 text-slate-500">{new Date(a.submitted_at).toLocaleString()}</td>
                       <td className="px-4 py-2.5 space-x-1">
@@ -274,7 +293,12 @@ export default function QuizDetailPage() {
           if (!a) return null;
           return (
             <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50/50 p-4 text-sm space-y-2">
-              <p className="font-semibold text-slate-900">{a.student.name} — answers</p>
+              <p className="font-semibold text-slate-900">{a.group_info ? a.group_info.name : a.student.name} — answers</p>
+              {a.group_info && (
+                <p className="text-slate-600">
+                  Members: {a.group_info.members.map((m) => `${m.name} (${m.roll})`).join(", ")}
+                </p>
+              )}
               {quiz.questions.map((qn, i) => {
                 const per = a.per_question?.find((p) => p.qid === qn.id);
                 return (

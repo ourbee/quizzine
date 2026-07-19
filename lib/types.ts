@@ -29,6 +29,9 @@ export interface QuizSettings {
   perQuestionSeconds?: number; // timerMode "question"
   closesAt?: string; // ISO datetime; stop accepting new starts
   allowMultiple: boolean;
+  groupMode?: boolean; // one submission per group instead of per student
+  groupMin?: number; // members per group, inclusive bounds
+  groupMax?: number;
 }
 
 export interface Quiz {
@@ -52,6 +55,18 @@ export interface StudentInfo {
   rollNorm: string;
 }
 
+export interface GroupMember {
+  name: string;
+  roll: string;
+}
+
+export interface GroupInfo {
+  name: string;
+  nameNorm: string;
+  semester: number;
+  members: GroupMember[];
+}
+
 export interface PerQuestionResult {
   qid: string;
   answer?: string;
@@ -68,6 +83,7 @@ export interface ReviewPayload {
   quizTitle: string;
   theme: string;
   student: StudentInfo;
+  group?: GroupInfo;
   questions: Question[];
   per: PerQuestionResult[];
   score: number;
