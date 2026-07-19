@@ -1,24 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
-import { isTeacher } from "@/lib/auth";
+import { currentTeacher } from "@/lib/auth";
 import { genId, slugify } from "@/lib/normalize";
 import type { Question, QuizSettings } from "@/lib/types";
 
 export async function GET() {
-  if (!(await isTeacher())) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const owner = await currentTeacher();
+  if (!owner) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const rows = await q(
     `SELECT z.id, z.slug, z.title, z.theme, z.accepting, z.created_at,
             count(a.id) FILTER (WHERE a.status = 'submitted') AS responses
        FROM quizzes z
        LEFT JOIN attempts a ON a.quiz_id = z.id
+      WHERE z.owner = $1
       GROUP BY z.id
-      ORDER BY z.created_at DESC`
+      ORDER BY z.created_at DESC`,
+    [owner]
   );
-  return NextResponse.json({ quizzes: rows });
+  return NextResponse.json({ owner, quizzes: rows });
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await isTeacher())) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const owner = await currentTeacher();
+  if (!owner) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const body = await req.json().catch(() => null);
   if (!body || typeof body.title !== "string" || !body.title.trim() || !Array.isArray(body.questions) || body.questions.length === 0) {
     return NextResponse.json({ error: "A title and at least one question are required." }, { status: 400 });
@@ -44,8 +48,8 @@ export async function POST(req: NextRequest) {
   const id = genId();
   const slug = slugify(body.title);
   await q(
-    `INSERT INTO quizzes (id, slug, title, description, intro_media, questions, settings, theme)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    `INSERT INTO quizzes (id, slug, title, description, intro_media, questions, settings, theme, owner)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       id,
       slug,
@@ -55,6 +59,7 @@ export async function POST(req: NextRequest) {
       JSON.stringify(questions),
       JSON.stringify(settings),
       typeof body.theme === "string" ? body.theme : "slate",
+      owner,
     ]
   );
   return NextResponse.json({ id, slug });

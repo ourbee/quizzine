@@ -30,12 +30,26 @@ No database setup needed locally — QuizDeck uses an embedded PGlite database s
 3. Add an environment variable `TEACHER_PASSCODE` with a passcode of your choice.
 4. Deploy. Tables are created automatically on first use.
 
+## Teacher accounts (Google sign-in)
+
+Any teacher can sign in with Google; each account only sees its own quizzes. To enable it:
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) → create/select a project → **APIs & Services → OAuth consent screen** (External, app name QuizDeck, publish).
+2. **APIs & Services → Credentials → Create credentials → OAuth client ID → Web application.**
+3. Under **Authorised JavaScript origins** add your production URL (e.g. `https://quizdeck.vercel.app`) and `http://localhost:3600` for local dev. No redirect URIs are needed.
+4. Copy the Client ID into the `NEXT_PUBLIC_GOOGLE_CLIENT_ID` environment variable and redeploy.
+
+When `NEXT_PUBLIC_GOOGLE_CLIENT_ID` is not set, the dashboard falls back to the passcode sign-in, which maps to `DEFAULT_OWNER_EMAIL`. Quizzes created before accounts existed are automatically assigned to `DEFAULT_OWNER_EMAIL` — set it to the same Gmail address you will sign in with so you keep your old quizzes.
+
 ## Environment variables
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | in production | Postgres connection string (Neon). Falls back to local PGlite when absent. |
-| `TEACHER_PASSCODE` | recommended | Passcode for `/teacher`. Defaults to `quizdeck`. |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | for Google sign-in | OAuth Web client ID from Google Cloud console. |
+| `DEFAULT_OWNER_EMAIL` | recommended | Email that owns passcode sign-ins and pre-account quizzes. |
+| `AUTH_SECRET` | recommended | Secret for signing session cookies (any long random string). |
+| `TEACHER_PASSCODE` | fallback only | Passcode sign-in when Google is not configured. Defaults to `quizdeck`. |
 
 ## File format
 

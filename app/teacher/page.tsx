@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 interface QuizRow {
@@ -13,11 +13,28 @@ interface QuizRow {
   responses: string | number;
 }
 
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: { client_id: string; callback: (r: { credential: string }) => void }) => void;
+          renderButton: (el: HTMLElement, options: Record<string, unknown>) => void;
+        };
+      };
+    };
+  }
+}
+
 export default function TeacherPage() {
   const [state, setState] = useState<"loading" | "login" | "ready">("loading");
   const [quizzes, setQuizzes] = useState<QuizRow[]>([]);
+  const [owner, setOwner] = useState("");
   const [pass, setPass] = useState("");
   const [error, setError] = useState("");
+  const googleBtn = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/quizzes");
@@ -27,6 +44,7 @@ export default function TeacherPage() {
     }
     const data = await res.json();
     setQuizzes(data.quizzes ?? []);
+    setOwner(data.owner ?? "");
     setState("ready");
   }, []);
 
@@ -34,7 +52,56 @@ export default function TeacherPage() {
     load();
   }, [load]);
 
-  async function login(e: React.FormEvent) {
+  // Render the Google sign-in button once the login form is visible.
+  useEffect(() => {
+    if (state !== "login" || !GOOGLE_CLIENT_ID) return;
+
+    const render = () => {
+      if (!window.google || !googleBtn.current) return;
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: async ({ credential }) => {
+          setError("");
+          const res = await fetch("/api/auth", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ credential }),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            setError(data.error ?? "Google sign-in failed.");
+            return;
+          }
+          setState("loading");
+          load();
+        },
+      });
+      window.google.accounts.id.renderButton(googleBtn.current, {
+        theme: "outline",
+        size: "large",
+        text: "signin_with",
+        width: 320,
+      });
+    };
+
+    if (window.google) {
+      render();
+      return;
+    }
+    const existing = document.getElementById("gsi-script");
+    if (existing) {
+      existing.addEventListener("load", render);
+      return () => existing.removeEventListener("load", render);
+    }
+    const script = document.createElement("script");
+    script.id = "gsi-script";
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.onload = render;
+    document.head.appendChild(script);
+  }, [state, load]);
+
+  async function loginWithPasscode(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     const res = await fetch("/api/auth", {
@@ -50,6 +117,13 @@ export default function TeacherPage() {
     load();
   }
 
+  async function signOut() {
+    await fetch("/api/auth", { method: "DELETE" });
+    setQuizzes([]);
+    setOwner("");
+    setState("login");
+  }
+
   if (state === "loading") {
     return <main className="max-w-3xl mx-auto px-6 py-20 text-center text-slate-500">Loading…</main>;
   }
@@ -58,21 +132,32 @@ export default function TeacherPage() {
     return (
       <main className="max-w-sm mx-auto px-6 py-24">
         <h1 className="text-2xl font-bold text-slate-900">Teacher sign-in</h1>
-        <p className="mt-1 text-sm text-slate-500">Enter the teacher passcode to open the dashboard.</p>
-        <form onSubmit={login} className="mt-6 space-y-3">
-          <input
-            type="password"
-            value={pass}
-            onChange={(e) => setPass(e.target.value)}
-            placeholder="Passcode"
-            autoFocus
-            className="w-full rounded-lg border border-slate-300 px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-          />
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <button type="submit" className="w-full rounded-lg bg-blue-700 py-2.5 text-white font-semibold hover:bg-blue-800 transition">
-            Open dashboard
-          </button>
-        </form>
+        {GOOGLE_CLIENT_ID ? (
+          <>
+            <p className="mt-1 text-sm text-slate-500">
+              Sign in with your Google account. Your quizzes are private to your account.
+            </p>
+            <div ref={googleBtn} className="mt-6 flex justify-center" />
+          </>
+        ) : (
+          <>
+            <p className="mt-1 text-sm text-slate-500">Enter the teacher passcode to open the dashboard.</p>
+            <form onSubmit={loginWithPasscode} className="mt-6 space-y-3">
+              <input
+                type="password"
+                value={pass}
+                onChange={(e) => setPass(e.target.value)}
+                placeholder="Passcode"
+                autoFocus
+                className="w-full rounded-lg border border-slate-300 px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              />
+              <button type="submit" className="w-full rounded-lg bg-blue-700 py-2.5 text-white font-semibold hover:bg-blue-800 transition">
+                Open dashboard
+              </button>
+            </form>
+          </>
+        )}
+        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       </main>
     );
   }
@@ -83,7 +168,11 @@ export default function TeacherPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Your quizzes</h1>
           <p className="text-sm text-slate-500 mt-0.5">
+            {owner && <span className="mr-2">{owner} ·</span>}
             {quizzes.length === 0 ? "Nothing here yet — create your first quiz." : `${quizzes.length} quiz${quizzes.length === 1 ? "" : "zes"}`}
+            <button onClick={signOut} className="ml-2 underline underline-offset-2 hover:text-slate-800">
+              Sign out
+            </button>
           </p>
         </div>
         <Link href="/teacher/new" className="rounded-lg bg-blue-700 px-5 py-2.5 text-white font-semibold hover:bg-blue-800 transition">

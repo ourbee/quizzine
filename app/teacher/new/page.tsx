@@ -185,8 +185,9 @@ export default function NewQuizPage() {
           <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
             <p className="text-sm text-blue-900 font-medium">Workflow</p>
             <p className="text-sm text-blue-800 mt-1">
-              1. Copy the AI prompt below into ChatGPT, Claude or Gemini (attach your source material if any). 2. Review
-              the drafted questions with the AI. 3. Ask for the final file and upload or paste it here.
+              1. Copy the AI prompt below into ChatGPT, Claude or Gemini (attach your source material if any). 2. Upload
+              or paste the file it returns. 3. Review everything in the preview here — ask the AI for a corrected file if
+              something is off.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button onClick={copyPrompt} className="rounded-lg bg-blue-700 px-4 py-2 text-sm text-white font-semibold hover:bg-blue-800">

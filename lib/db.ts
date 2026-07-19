@@ -32,7 +32,13 @@ CREATE TABLE IF NOT EXISTS attempts (
   submitted_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS attempts_quiz_idx ON attempts(quiz_id);
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS owner text;
 `;
+
+// Quizzes created before teacher accounts existed get assigned to this owner.
+const BACKFILL_OWNER = "UPDATE quizzes SET owner = $1 WHERE owner IS NULL";
+const backfillOwner = () =>
+  (process.env.DEFAULT_OWNER_EMAIL || "ritwik.jude@gmail.com").toLowerCase();
 
 let ready: Promise<QueryFn> | null = null;
 
@@ -46,6 +52,7 @@ async function init(): Promise<QueryFn> {
       ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false },
     });
     await pool.query(SCHEMA);
+    await pool.query(BACKFILL_OWNER, [backfillOwner()]);
     return async (text, params) => (await pool.query(text, params as never[])).rows;
   }
   const { PGlite } = await import("@electric-sql/pglite");
@@ -53,6 +60,7 @@ async function init(): Promise<QueryFn> {
   mkdirSync(".data/quizdeck", { recursive: true });
   const db = new PGlite(".data/quizdeck");
   await db.exec(SCHEMA);
+  await db.query(BACKFILL_OWNER, [backfillOwner()]);
   return async (text, params) => (await db.query(text, params as never[])).rows as Row[];
 }
 

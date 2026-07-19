@@ -295,7 +295,7 @@ export default function StudentQuizPage() {
                             className={`rounded-lg border px-3 py-2 ${isCorrect ? "border-green-400 bg-green-50 text-green-900" : isChosen ? "border-red-300 bg-red-50 text-red-900" : ""}`}
                             style={isCorrect || isChosen ? undefined : { borderColor: theme.border }}
                           >
-                            <span className="font-semibold">{o.key}.</span> {o.text}
+                            {o.text}
                             {isCorrect && <span className="ml-1.5 text-xs font-semibold">✓ correct answer</span>}
                             {isChosen && !isCorrect && <span className="ml-1.5 text-xs font-semibold">your choice</span>}
                             {isChosen && isCorrect && <span className="ml-1.5 text-xs font-semibold">(your choice)</span>}
@@ -305,10 +305,10 @@ export default function StudentQuizPage() {
                       {(chosen?.feedback || correctOpt?.feedback || qn.feedbackCorrect || qn.feedbackIncorrect) && (
                         <div className="mt-2 rounded-lg p-3 text-sm" style={{ background: theme.accentSoft }}>
                           {chosen?.feedback && (
-                            <p><span className="font-semibold">Your answer ({chosen.key}):</span> {chosen.feedback}</p>
+                            <p><span className="font-semibold">Your answer:</span> {chosen.feedback}</p>
                           )}
                           {!per?.correct && correctOpt?.feedback && correctOpt.key !== chosen?.key && (
-                            <p className="mt-1"><span className="font-semibold">Why {correctOpt.key} is right:</span> {correctOpt.feedback}</p>
+                            <p className="mt-1"><span className="font-semibold">Why the correct answer is right:</span> {correctOpt.feedback}</p>
                           )}
                           {per?.correct && qn.feedbackCorrect && <p className="mt-1">{qn.feedbackCorrect}</p>}
                           {!per?.correct && qn.feedbackIncorrect && <p className="mt-1">{qn.feedbackIncorrect}</p>}
@@ -330,6 +330,34 @@ export default function StudentQuizPage() {
                 </div>
               );
             })}
+          </div>
+
+          <div className="no-print mt-6 rounded-2xl border p-5 text-center shadow-sm" style={cardStyle}>
+            <p className="text-sm" style={{ color: theme.muted }}>
+              Keep a copy of this response for your records.
+            </p>
+            <button onClick={() => window.print()} className="mt-3 rounded-lg px-6 py-2.5 font-semibold" style={accentBtn}>
+              Print / save your copy
+            </button>
+          </div>
+
+          <div className="no-print fixed bottom-5 right-4 flex flex-col gap-2">
+            <button
+              onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+              aria-label="Jump to top"
+              className="w-11 h-11 rounded-full shadow-lg text-lg font-bold"
+              style={accentBtn}
+            >
+              ↑
+            </button>
+            <button
+              onClick={() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" })}
+              aria-label="Jump to bottom"
+              className="w-11 h-11 rounded-full shadow-lg text-lg font-bold"
+              style={accentBtn}
+            >
+              ↓
+            </button>
           </div>
         </main>
       </div>
@@ -373,8 +401,11 @@ export default function StudentQuizPage() {
                 <div className="flex gap-3">
                   <input
                     value={roll}
-                    onChange={(e) => setRoll(e.target.value)}
+                    onChange={(e) => setRoll(e.target.value.replace(/\D/g, ""))}
                     placeholder="Class roll number"
+                    inputMode="numeric"
+                    pattern="[0-9]+"
+                    title="Digits only"
                     required
                     className="flex-1 rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
                     style={{ borderColor: theme.border }}
@@ -428,7 +459,7 @@ export default function StudentQuizPage() {
                 className="w-full text-left rounded-xl border-2 px-4 py-3 text-sm font-medium transition"
                 style={selected ? { borderColor: theme.accent, background: theme.accentSoft } : { borderColor: theme.border, background: theme.card }}
               >
-                <span className="font-bold mr-1.5">{o.key}.</span> {o.text}
+                {o.text}
               </button>
             );
           })}

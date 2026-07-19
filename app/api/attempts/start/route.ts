@@ -11,6 +11,9 @@ export async function POST(req: NextRequest) {
   if (!body?.slug || !name || !roll || !(semester >= 1 && semester <= 8)) {
     return NextResponse.json({ error: "Please fill in your name, roll number and semester." }, { status: 400 });
   }
+  if (!/^\d{1,15}$/.test(roll)) {
+    return NextResponse.json({ error: "Roll number must contain digits only." }, { status: 400 });
+  }
 
   const rows = await q<{ id: string; questions: Question[]; settings: QuizSettings; accepting: boolean }>(
     `SELECT id, questions, settings, accepting FROM quizzes WHERE slug = $1`,
