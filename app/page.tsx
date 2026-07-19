@@ -1,65 +1,54 @@
-import Image from "next/image";
+import Link from "next/link";
+
+const FEATURES: [string, string][] = [
+  ["AI-friendly intake", "Generate questions with ChatGPT, Claude or Gemini using the built-in prompt, then upload the Excel/JSON/text file — the quiz builds itself."],
+  ["Server-side grading", "Answer keys never reach the browser. Students see their score and per-option feedback only after submitting."],
+  ["Timers & shuffling", "Whole-quiz or per-question countdowns, closing times, and per-student question/option shuffling."],
+  ["Media questions", "Attach images, audio clips or YouTube videos to any question — or set an intro video students watch before starting."],
+  ["Feedback that teaches", "Every option carries feedback, so a wrong answer explains itself. Students can print or save their response copy."],
+  ["Teacher dashboard", "Live responses, item analysis with distractor breakdowns, duplicate detection, and one-click Excel export."],
+];
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
+    <main className="max-w-4xl mx-auto px-6 py-16 w-full">
+      <div className="text-center">
+        <p className="text-sm font-semibold tracking-widest text-blue-700 uppercase">QuizDeck</p>
+        <h1 className="mt-3 text-4xl sm:text-5xl font-bold tracking-tight text-slate-900">
+          From AI-generated questions
+          <br className="hidden sm:block" /> to a live quiz in one upload.
+        </h1>
+        <p className="mt-4 text-lg text-slate-600 max-w-2xl mx-auto">
+          A Google Forms alternative built for teachers: draft questions with any AI tool, upload the file, share a
+          link or QR code — students get an auto-graded quiz with real feedback.
+        </p>
+        <div className="mt-8 flex items-center justify-center gap-4">
+          <Link
+            href="/teacher"
+            className="rounded-lg bg-blue-700 px-6 py-3 text-white font-semibold shadow hover:bg-blue-800 transition"
+          >
+            Teacher dashboard
+          </Link>
           <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
+            href="https://github.com/ourbee"
             target="_blank"
             rel="noopener noreferrer"
+            className="rounded-lg border border-slate-300 px-6 py-3 font-semibold text-slate-700 hover:bg-slate-100 transition"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
+            GitHub
           </a>
         </div>
-      </main>
-    </div>
+        <p className="mt-3 text-sm text-slate-500">Students only need the quiz link — no account, nothing to install.</p>
+      </div>
+
+      <div className="mt-16 grid sm:grid-cols-2 gap-5">
+        {FEATURES.map(([title, body]) => (
+          <div key={title} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="font-semibold text-slate-900">{title}</h2>
+            <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">{body}</p>
+          </div>
+        ))}
+      </div>
+    </main>
   );
 }

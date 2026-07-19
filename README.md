@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# QuizDeck
 
-## Getting Started
+A Google Forms alternative built for teachers: draft questions with any AI tool (ChatGPT, Claude, Gemini), upload the file, share a link or QR code — students take an auto-graded quiz with per-option feedback, and every response lands in your dashboard.
 
-First, run the development server:
+Created by [Ritwik Balo](https://github.com/ourbee).
+
+## How it works
+
+1. **Teacher** opens `/teacher` (passcode-protected), clicks **New quiz**, copies the built-in AI prompt into any chatbot, reviews the drafted questions there, then uploads/pastes the final output (`.xlsx`, `.csv`, `.json`, or plain-text blocks).
+2. QuizDeck validates the file with row-level error messages, shows a full preview, and publishes to a share link + QR code.
+3. **Students** open the link, enter name / roll number / semester, and take the quiz — with autosave, optional timers, and per-student question/option shuffling.
+4. Grading happens **server-side** (answer keys never reach the browser). Students immediately see their score, every option's feedback, and can print/save their copy.
+5. The dashboard shows live responses, item analysis with distractor breakdowns, late/duplicate flags, and one-click Excel export.
+
+Question types: `mcq` (auto-graded), `short` / `essay` (typed answers, graded by the teacher later — marked "awaiting review").
+
+## Local development
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+No database setup needed locally — QuizDeck uses an embedded PGlite database stored in `.data/` when `DATABASE_URL` is not set. Default teacher passcode in dev: `quizdeck`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploying to Vercel + Neon
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Push this repo to GitHub and import it in Vercel.
+2. In the Vercel dashboard → **Storage → Create Database → Neon (Postgres)** — this provisions the free tier and injects `DATABASE_URL` automatically.
+3. Add an environment variable `TEACHER_PASSCODE` with a passcode of your choice.
+4. Deploy. Tables are created automatically on first use.
 
-## Learn More
+## Environment variables
 
-To learn more about Next.js, take a look at the following resources:
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | in production | Postgres connection string (Neon). Falls back to local PGlite when absent. |
+| `TEACHER_PASSCODE` | recommended | Passcode for `/teacher`. Defaults to `quizdeck`. |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## File format
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Download the Excel template from the New quiz screen, or use these columns:
 
-## Deploy on Vercel
+`Question | Type | OptionA–D | CorrectAnswer | FeedbackA–D | Points | MediaURL | Passage`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`MediaURL` accepts image, audio, or YouTube links — YouTube URLs render as embedded players. JSON and plain-text block formats are documented inside the in-app AI prompt.
