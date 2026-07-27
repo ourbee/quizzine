@@ -8,8 +8,8 @@ Created by [Ritwik Balo](https://github.com/ourbee).
 
 ## How it works
 
-1. **Teacher** opens `/teacher` (passcode-protected), clicks **New quiz**, copies the built-in AI prompt into any chatbot, reviews the drafted questions there, then uploads/pastes the final output (`.xlsx`, `.csv`, `.json`, or plain-text blocks).
-2. QuizMon validates the file with row-level error messages, shows a full preview, and publishes to a share link + QR code.
+1. **Teacher** opens `/teacher` (passcode-protected), clicks **New quiz**, copies the built-in AI prompt into any chatbot, reviews the drafted questions there, then uploads/pastes the final output (`.xlsx`, `.csv`, `.json`, plain-text blocks, or a Google Apps Script `.gs` / `.js` quiz builder).
+2. QuizMon validates the file with row-level error messages, shows a full preview, and publishes to a share link + QR code. One file can hold several quizzes — see below.
 3. **Students** open the link, enter name / roll number / semester, and take the quiz — with autosave, optional timers, and per-student question/option shuffling.
 4. Grading happens **server-side** (answer keys never reach the browser). Students immediately see their score, every option's feedback, and can print/save their copy.
 5. The dashboard shows live responses, item analysis with distractor breakdowns, late/duplicate flags, and one-click Excel export.
@@ -60,3 +60,12 @@ Download the Excel template from the New quiz screen, or use these columns:
 `Question | Type | OptionA–D | CorrectAnswer | FeedbackA–D | Points | MediaURL | Passage`
 
 `MediaURL` accepts image, audio, or YouTube links — YouTube URLs render as embedded players. JSON and plain-text block formats are documented inside the in-app AI prompt.
+
+## Several quizzes from one file
+
+- **Workbook with several sheets** — one quiz per sheet, named after the sheet (a `QuizTitle` column overrides that). Sheets without question rows, such as instructions or answer keys, are ignored.
+- **Google Apps Script** (`.gs` / `.js`) — the script that builds your Google Forms quizzes is read directly, one quiz per `FormApp.create(...)`. Both styles work: a data array plus a generic builder, or a long run of `form.addMultipleChoiceItem()` calls. Scripts that build one form per run and reschedule themselves with a time trigger are followed through to the end, so all their forms arrive at once.
+
+  The script is executed in a sandboxed iframe against a mock Apps Script runtime (`lib/appsscript.ts`) — nothing is sent to Google, and it never touches the page or your account. Question titles, help text (kept as the passage), points, choices, the correct answer, and correct/incorrect feedback all carry over; `Full Name`/`Roll Number`-style fields are dropped, since QuizMon collects those itself. Checkbox questions with several correct choices are graded on the first one, and flagged for you.
+
+The review step lists everything found, so you can untick quizzes, rename them, and check the questions before publishing. Selected quizzes share the settings you pick and each gets its own link and QR code.

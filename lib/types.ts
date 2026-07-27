@@ -97,6 +97,8 @@ export interface ParsedQuiz {
   title?: string;
   description?: string;
   questions: RawQuestion[];
+  /** Parser-level remarks (e.g. fields skipped) shown alongside validation warnings. */
+  notes?: string[];
 }
 
 /** Loosely-typed question straight out of a parser, before validation. */

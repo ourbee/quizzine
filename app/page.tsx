@@ -2,6 +2,7 @@ import Link from "next/link";
 
 const FEATURES: [string, string][] = [
   ["AI-friendly intake", "Generate questions with ChatGPT, Claude or Gemini using the built-in prompt, then upload the Excel/JSON/text file — the quiz builds itself."],
+  ["Several quizzes at once", "One workbook with a sheet per quiz, or a Google Apps Script that builds several Forms, becomes several quizzes — each with its own link and QR code."],
   ["Server-side grading", "Answer keys never reach the browser. Students see their score and per-option feedback only after submitting."],
   ["Timers & shuffling", "Whole-quiz or per-question countdowns, closing times, and per-student question/option shuffling."],
   ["Media questions", "Attach images, audio clips or YouTube videos to any question — or set an intro video students watch before starting."],

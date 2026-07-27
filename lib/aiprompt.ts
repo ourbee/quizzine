@@ -7,7 +7,8 @@ MY BRIEF (I will fill these in):
 - Language/style: [e.g. British English]
 - Question types to use: [mcq only / mix of mcq, short, essay]
 - Points per question: [default 1]
-- Output format: [A = Excel/CSV table, B = JSON, C = plain-text blocks]
+- Output format: [A = Excel/CSV table, B = JSON, C = plain-text blocks, D = Google Apps Script quiz builder]
+- Number of quizzes: [1 — or e.g. "5 quizzes, one per theme". For several quizzes use format A with one SHEET per quiz (sheet name = quiz title), or format D with one Google Form per quiz.]
 
 QUALITY RULES (mandatory):
 1. Every question must have exactly one defensible correct answer.
@@ -25,7 +26,7 @@ OUTPUT FORMATS:
 
 FORMAT A — Excel/CSV (default): a table with EXACTLY these columns, one row per question:
 Question | Type | OptionA | OptionB | OptionC | OptionD | CorrectAnswer | FeedbackA | FeedbackB | FeedbackC | FeedbackD | Points | MediaURL | Passage
-(If you can generate a downloadable .xlsx, do that; otherwise give me a CSV code block I can paste into a spreadsheet. CorrectAnswer is the letter only.)
+(If you can generate a downloadable .xlsx, do that; otherwise give me a CSV code block I can paste into a spreadsheet. CorrectAnswer is the letter only. For several quizzes, put each quiz on its own sheet and name the sheet after the quiz — the app builds one quiz per sheet.)
 
 FORMAT B — JSON: a single code block:
 {
@@ -66,5 +67,7 @@ FD: feedback for D
 Correct: B
 Points: 1
 Media: (optional URL)
+
+FORMAT D — Google Apps Script: a .gs / .js file that builds the quiz as a Google Form, i.e. FormApp.create(title).setDescription(...), form.addMultipleChoiceItem() with setTitle/setPoints/setChoices(createChoice(text, isCorrect)), and FormApp.createFeedback().setText(...) passed to setFeedbackForCorrect / setFeedbackForIncorrect. Build one Form per quiz — several Forms in one file is fine. QuizMon reads such a file directly, so this is also the format to give me if I ask for Google Forms.
 
 Use no markdown bold/italics inside the final output values.`;

@@ -18,6 +18,8 @@ function setOption(q: RawQuestion, key: string, field: "text" | "feedback", valu
 /** Parse rows from a spreadsheet (SheetJS sheet_to_json output, header row as keys). */
 export function parseSheetRows(rows: Record<string, unknown>[]): ParsedQuiz {
   const questions: RawQuestion[] = [];
+  let title: string | undefined;
+  let description: string | undefined;
   for (const row of rows) {
     // Normalize headers: lowercase, strip spaces/underscores.
     const norm: Record<string, string> = {};
@@ -29,6 +31,9 @@ export function parseSheetRows(rows: Record<string, unknown>[]): ParsedQuiz {
       for (const k of keys) if (norm[k] !== undefined && norm[k] !== "") return norm[k];
       return undefined;
     };
+    // Optional columns naming the quiz itself — handy when one workbook holds several.
+    title ??= get("quiztitle", "formtitle");
+    description ??= get("quizdescription", "formdescription");
     const text = get("question", "questiontext", "q");
     if (!text) continue;
     const question: RawQuestion = {
@@ -51,7 +56,33 @@ export function parseSheetRows(rows: Record<string, unknown>[]): ParsedQuiz {
     }
     questions.push(question);
   }
-  return { questions };
+  return { title, description, questions };
+}
+
+export interface SheetInput {
+  name: string;
+  rows: Record<string, unknown>[];
+}
+
+/** Sheet names spreadsheet apps invent, which say nothing about the quiz. */
+const GENERIC_SHEET_RE = /^(sheet\s*\d*|questions?|quiz|data|table\s*\d*|form\s*responses?\s*\d*)$/i;
+
+/**
+ * One quiz per sheet: a workbook with several sheets yields several quizzes.
+ * Sheets with no question rows (instructions, keys, scratch work) are ignored.
+ */
+export function parseWorkbookSheets(sheets: SheetInput[]): { sheet: string; quiz: ParsedQuiz }[] {
+  const found: { sheet: string; quiz: ParsedQuiz }[] = [];
+  for (const sheet of sheets) {
+    const parsed = parseSheetRows(sheet.rows);
+    if (!parsed.questions.length) continue;
+    const sheetName = sheet.name.trim();
+    found.push({
+      sheet: sheetName,
+      quiz: { ...parsed, title: parsed.title ?? (GENERIC_SHEET_RE.test(sheetName) ? undefined : sheetName) },
+    });
+  }
+  return found;
 }
 
 /** Parse a pasted/uploaded JSON quiz: either {title, description, questions:[...]} or a bare array. */
