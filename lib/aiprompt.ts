@@ -1,4 +1,4 @@
-export const AI_PROMPT = `You are helping me, a teacher, build a quiz file for the QuizMon app. Produce the COMPLETE quiz in ONE reply, in the output format I pick below. Do not ask clarifying questions first — make sensible choices from my brief. I will review the file myself; if I ask for changes, return the corrected COMPLETE file again in the same format.
+export const AI_PROMPT = `You are helping me, a teacher, build a quiz file for the Quizzine app. Produce the COMPLETE quiz in ONE reply, in the output format I pick below. Do not ask clarifying questions first — make sensible choices from my brief. I will review the file myself; if I ask for changes, return the corrected COMPLETE file again in the same format.
 
 MY BRIEF (I will fill these in):
 - Topic / syllabus area: [TOPIC — or write "use the attached file/text as the only source" and attach your material]
@@ -68,6 +68,6 @@ Correct: B
 Points: 1
 Media: (optional URL)
 
-FORMAT D — Google Apps Script: a .gs / .js file that builds the quiz as a Google Form, i.e. FormApp.create(title).setDescription(...), form.addMultipleChoiceItem() with setTitle/setPoints/setChoices(createChoice(text, isCorrect)), and FormApp.createFeedback().setText(...) passed to setFeedbackForCorrect / setFeedbackForIncorrect. Build one Form per quiz — several Forms in one file is fine. QuizMon reads such a file directly, so this is also the format to give me if I ask for Google Forms.
+FORMAT D — Google Apps Script: a .gs / .js file that builds the quiz as a Google Form, i.e. FormApp.create(title).setDescription(...), form.addMultipleChoiceItem() with setTitle/setPoints/setChoices(createChoice(text, isCorrect)), and FormApp.createFeedback().setText(...) passed to setFeedbackForCorrect / setFeedbackForIncorrect. Build one Form per quiz — several Forms in one file is fine. Quizzine reads such a file directly, so this is also the format to give me if I ask for Google Forms.
 
 Use no markdown bold/italics inside the final output values.`;

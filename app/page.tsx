@@ -14,7 +14,7 @@ export default function Home() {
   return (
     <main className="max-w-4xl mx-auto px-6 py-16 w-full">
       <div className="text-center">
-        <p className="text-sm font-semibold tracking-widest text-blue-700 uppercase">QuizMon</p>
+        <p className="text-sm font-semibold tracking-widest text-blue-700 uppercase">Quizzine</p>
         <h1 className="mt-3 text-4xl sm:text-5xl font-bold tracking-tight text-slate-900">
           From your questions
           <br className="hidden sm:block" /> to a live quiz in one upload.

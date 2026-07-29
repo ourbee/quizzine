@@ -32,7 +32,7 @@ export interface HarvestedForm {
   items: HarvestedItem[];
 }
 
-/** Fields the Apps Script forms collect that QuizMon asks for itself. */
+/** Fields the Apps Script forms collect that Quizzine asks for itself. */
 const IDENTITY_RE =
   /^(full\s*name|name|your\s*name|student\s*name|roll|roll\s*(no\.?|number)|registration|reg\.?\s*no|enrol(l)?ment|email|e-?mail|semester|sem|class|section|department|college|course|batch|date|phone|mobile)\b/i;
 const IDENTITY_SECTION_RE = /student\s*info|your\s*details|respondent|participant\s*info/i;
@@ -303,32 +303,32 @@ export const SANDBOX_SOURCE = `
     window.console = console_;
 
     var failures = [];
-    window.__quizmonBoot = function (resolveLocal) {
+    window.__quizzineBoot = function (resolveLocal) {
       failures = invokeEntryPoints(code, before, resolveLocal);
     };
     // The script and the call that drives it share one eval, so every builder it
     // declares — var, function, const or let — is reachable by name.
-    var boot = "\\n;window.__quizmonBoot(function (__quizmonName) {" +
-      " try { return eval(__quizmonName); } catch (e) { return null; } });";
+    var boot = "\\n;window.__quizzineBoot(function (__quizzineName) {" +
+      " try { return eval(__quizzineName); } catch (e) { return null; } });";
     try {
       (0, eval)(code + boot);
     } finally {
-      delete window.__quizmonBoot;
+      delete window.__quizzineBoot;
     }
     return { forms: forms, failures: failures };
   }
 
   addEventListener("message", function (ev) {
-    if (!ev.data || ev.data.type !== "quizmon-run") return;
+    if (!ev.data || ev.data.type !== "quizzine-run") return;
     try {
       var out = run(String(ev.data.code));
-      post({ type: "quizmon-result", forms: out.forms, failures: out.failures });
+      post({ type: "quizzine-result", forms: out.forms, failures: out.failures });
     } catch (e) {
-      post({ type: "quizmon-error", message: e && e.message ? e.message : String(e) });
+      post({ type: "quizzine-error", message: e && e.message ? e.message : String(e) });
     }
   });
 
-  post({ type: "quizmon-ready" });
+  post({ type: "quizzine-ready" });
 })();
 `;
 
@@ -367,9 +367,9 @@ export function runAppsScript(code: string, timeoutMs = 15000): Promise<Harveste
     function onMessage(ev: MessageEvent) {
       if (ev.source !== frame.contentWindow || !ev.data) return;
       const data = ev.data as { type?: string; forms?: HarvestedForm[]; failures?: string[]; message?: string };
-      if (data.type === "quizmon-ready") {
-        frame.contentWindow?.postMessage({ type: "quizmon-run", code }, "*");
-      } else if (data.type === "quizmon-result") {
+      if (data.type === "quizzine-ready") {
+        frame.contentWindow?.postMessage({ type: "quizzine-run", code }, "*");
+      } else if (data.type === "quizzine-result") {
         const forms = data.forms ?? [];
         if (!forms.length) {
           const why = data.failures?.length ? ` The script reported: ${data.failures[0]}` : "";
@@ -377,7 +377,7 @@ export function runAppsScript(code: string, timeoutMs = 15000): Promise<Harveste
         } else {
           finish(() => resolve(forms));
         }
-      } else if (data.type === "quizmon-error") {
+      } else if (data.type === "quizzine-error") {
         finish(() => reject(new Error(data.message || "The script could not be run.")));
       }
     }
@@ -446,7 +446,7 @@ export function formToParsedQuiz(form: HarvestedForm): ParsedQuiz {
 
   if (skippedIdentity) {
     notes.push(
-      `${skippedIdentity} student-information field${skippedIdentity > 1 ? "s were" : " was"} skipped — QuizMon collects name, roll number and semester itself.`
+      `${skippedIdentity} student-information field${skippedIdentity > 1 ? "s were" : " was"} skipped — Quizzine collects name, roll number and semester itself.`
     );
   }
   if (ungraded) {

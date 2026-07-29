@@ -180,7 +180,7 @@ export default function NewQuizPage() {
     ws["!cols"] = TEMPLATE_HEADERS.map((h) => ({ wch: h === "Question" || h.startsWith("Feedback") ? 40 : 14 }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Questions");
-    XLSX.writeFile(wb, "quizmon-template.xlsx");
+    XLSX.writeFile(wb, "quizzine-template.xlsx");
   }
 
   async function copyPrompt() {

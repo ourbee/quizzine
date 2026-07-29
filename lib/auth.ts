@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 export const COOKIE_NAME = "qd_teacher";
 
 function secret(): string {
-  return process.env.AUTH_SECRET || `quizmon:${process.env.TEACHER_PASSCODE || "quizmon"}`;
+  return process.env.AUTH_SECRET || `quizzine:${process.env.TEACHER_PASSCODE || "quizzine"}`;
 }
 
 /** Owner assigned to passcode sign-ins and to quizzes created before accounts existed. */
@@ -13,7 +13,7 @@ export function defaultOwner(): string {
 }
 
 export function passcode(): string {
-  return process.env.TEACHER_PASSCODE || "quizmon";
+  return process.env.TEACHER_PASSCODE || "quizzine";
 }
 
 export function sessionValue(email: string): string {

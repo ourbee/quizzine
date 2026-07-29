@@ -57,8 +57,8 @@ async function init(): Promise<QueryFn> {
   }
   const { PGlite } = await import("@electric-sql/pglite");
   const { mkdirSync } = await import("fs");
-  mkdirSync(".data/quizdeck", { recursive: true });
-  const db = new PGlite(".data/quizdeck");
+  mkdirSync(".data/quizzine", { recursive: true });
+  const db = new PGlite(".data/quizzine");
   await db.exec(SCHEMA);
   await db.query(BACKFILL_OWNER, [backfillOwner()]);
   return async (text, params) => (await db.query(text, params as never[])).rows as Row[];
