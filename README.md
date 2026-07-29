@@ -2,7 +2,7 @@
 
 A Google Forms alternative built for teachers: draft questions with any AI tool (ChatGPT, Claude, Gemini), upload the file, share a link or QR code — students take an auto-graded quiz with per-option feedback, and every response lands in your dashboard.
 
-Live at quizzine.vercel.app
+Live at [quizzine.vercel.app](https://quizzine.vercel.app)
 
 Created by [Ritwik Balo](https://github.com/ourbee).
 
