@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 import type { ParsedQuiz, Question, QType, RawQuestion } from "./types";
 
 const TYPE_ALIASES: Record<string, QType> = {

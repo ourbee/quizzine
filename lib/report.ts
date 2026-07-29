@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 // Cross-quiz reporting: turns the attempts of several quizzes into per-student
 // and per-semester performance rows. Roll number is the identity anchor — names
 // are only ever displayed, never used to match a student across quizzes, since

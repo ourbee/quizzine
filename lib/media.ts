@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 export type MediaKind = "youtube" | "image" | "audio" | "link";
 
 export function classifyMedia(url: string): { kind: MediaKind; embed?: string } {

@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 // Query helper that runs on Neon Postgres in production (DATABASE_URL set)
 // and on an embedded PGlite database for local development (no setup needed).
 

@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 import type { ParsedQuiz, RawQuestion } from "./types";
 
 const OPTION_KEYS = ["A", "B", "C", "D", "E", "F"];

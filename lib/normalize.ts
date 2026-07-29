@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 export function normRoll(roll: string): string {
   return roll.trim().replace(/\s+/g, " ").toUpperCase();
 }

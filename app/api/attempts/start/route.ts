@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { genId, normName, normRoll } from "@/lib/normalize";

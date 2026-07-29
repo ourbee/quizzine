@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 import type { PerQuestionResult, Question } from "./types";
 
 export function grade(questions: Question[], answers: Record<string, string>) {

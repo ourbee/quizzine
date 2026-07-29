@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {

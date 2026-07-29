@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 export const AI_PROMPT = `You are helping me, a teacher, build a quiz file for the Quizzine app. Produce the COMPLETE quiz in ONE reply, in the output format I pick below. Do not ask clarifying questions first — make sensible choices from my brief. I will review the file myself; if I ask for changes, return the corrected COMPLETE file again in the same format.
 
 MY BRIEF (I will fill these in):

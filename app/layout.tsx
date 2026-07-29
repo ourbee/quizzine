@@ -1,3 +1,8 @@
+/*
+ * Copyright © 2026 Ritwik Balo. All rights reserved.
+ * https://github.com/ourbee
+ */
+
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
@@ -31,15 +36,20 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <div className="flex-1 flex flex-col">{children}</div>
         <footer className="no-print text-center text-xs text-slate-500 py-4 border-t border-slate-200 bg-white/70">
-          Created by{" "}
-          <a
-            href="https://github.com/ourbee"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-medium underline underline-offset-2 hover:text-slate-800"
-          >
-            Ritwik Balo
-          </a>
+          <p>
+            Created by{" "}
+            <a
+              href="https://github.com/ourbee"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium underline underline-offset-2 hover:text-slate-800"
+            >
+              Ritwik Balo
+            </a>
+          </p>
+          <p className="mt-0.5 text-slate-400">
+            © 2026 Ritwik Balo. All rights reserved.
+          </p>
         </footer>
       </body>
     </html>
