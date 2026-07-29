@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS attempts (
 );
 CREATE INDEX IF NOT EXISTS attempts_quiz_idx ON attempts(quiz_id);
 ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS owner text;
+CREATE TABLE IF NOT EXISTS band_schemes (
+  id text PRIMARY KEY,
+  owner text NOT NULL,
+  name text NOT NULL,
+  bands jsonb NOT NULL,
+  is_default boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS band_schemes_owner_idx ON band_schemes(owner);
 `;
 
 // Quizzes created before teacher accounts existed get assigned to this owner.

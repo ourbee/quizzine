@@ -13,14 +13,27 @@ Created by [Ritwik Balo](https://github.com/ourbee).
 3. **Students** open the link, enter name / roll number / semester, and take the quiz — with autosave, optional timers, and per-student question/option shuffling.
 4. Grading happens **server-side** (answer keys never reach the browser). Students immediately see their score, every option's feedback, and can print/save their copy.
 5. The dashboard shows live responses, item analysis with distractor breakdowns, late/duplicate flags, and one-click Excel export.
+6. **Reports** combine any set of quizzes into one performance report by student and by semester — see below.
 
 Question types: `mcq` (auto-graded), `short` / `essay` (typed answers, graded by the teacher later — marked "awaiting review").
+
+## Reports across several quizzes
+
+`/teacher/reports` turns a term's worth of quizzes into a single performance report.
+
+- **Roll number is the identity anchor.** Students are matched across quizzes on their roll number alone, never on their name, so a term of "ANANYA SEN", "Ananya  Sen" and "ananya sen" stays one record. Where the same roll has been entered under genuinely different names, the report flags it and shows the most recent.
+- **Group work counts too.** A group submission credits its score to every member listed on it, so individual and group quizzes combine into one picture per student.
+- **Two levels.** A per-student table with a column per quiz, and a summary per semester — average, median, range, participation, and the spread across bands.
+- **Teacher-defined bands.** Set your own cut-offs, labels and colours, save them as a named scheme, and mark one as your default. Each band runs from its cut-off up to the next; the lowest is always pulled down to 0% so every student lands in exactly one band.
+- **Choices that change the maths**, all set in the report itself: whether each quiz counts equally or every mark does; whether a quiz a student never sat is left out of their average or counted as zero; and whether a repeat attempt counts as their best or their latest.
+- Exports to Excel with four sheets — students, semester summary, per-quiz averages, and the settings and bands the report was built with, so the numbers can be reproduced later.
 
 ## Local development
 
 ```bash
 npm install
 npm run dev
+npm test    # aggregation maths for the cross-quiz reports
 ```
 
 No database setup needed locally — Quizzine uses an embedded PGlite database stored in `.data/` when `DATABASE_URL` is not set. Default teacher passcode in dev: `quizzine`.

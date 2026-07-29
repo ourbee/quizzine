@@ -175,9 +175,17 @@ export default function TeacherPage() {
             </button>
           </p>
         </div>
-        <Link href="/teacher/new" className="rounded-lg bg-blue-700 px-5 py-2.5 text-white font-semibold hover:bg-blue-800 transition">
-          + New quiz
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/teacher/reports"
+            className="rounded-lg border border-slate-300 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-100 transition"
+          >
+            Reports
+          </Link>
+          <Link href="/teacher/new" className="rounded-lg bg-blue-700 px-5 py-2.5 text-white font-semibold hover:bg-blue-800 transition">
+            + New quiz
+          </Link>
+        </div>
       </div>
 
       <div className="mt-8 space-y-3">
