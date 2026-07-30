@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { currentTeacher } from "@/lib/auth";
 import { genId, slugify } from "@/lib/normalize";
+import { correctKeysOf, isGraded } from "@/lib/questions";
 import type { Question, QuizSettings } from "@/lib/types";
 
 export async function GET() {
@@ -34,11 +35,24 @@ export async function POST(req: NextRequest) {
   }
   const questions = body.questions as Question[];
   for (const [i, qn] of questions.entries()) {
-    if (!qn.text || typeof qn.points !== "number" || qn.points <= 0) {
+    const scored = isGraded(qn);
+    // Unscored questions are worth exactly nothing; scored ones must be worth something.
+    const pointsOk = typeof qn.points === "number" && (scored ? qn.points > 0 : qn.points === 0);
+    if (!qn.text || !pointsOk) {
       return NextResponse.json({ error: `Question ${i + 1} is malformed.` }, { status: 400 });
     }
+    if (!scored) continue;
     if (qn.type === "mcq" && (!qn.correct || !qn.options?.some((o) => o.key === qn.correct))) {
       return NextResponse.json({ error: `Question ${i + 1}: correct answer does not match its options.` }, { status: 400 });
+    }
+    if (qn.type === "multi") {
+      const keys = correctKeysOf(qn);
+      if (!keys.length || !keys.every((k) => qn.options?.some((o) => o.key === k))) {
+        return NextResponse.json(
+          { error: `Question ${i + 1}: the correct answers do not match its options.` },
+          { status: 400 }
+        );
+      }
     }
   }
   const groupMode = !!body.settings?.groupMode;
@@ -47,6 +61,8 @@ export async function POST(req: NextRequest) {
   const settings: QuizSettings = {
     shuffleQuestions: !!body.settings?.shuffleQuestions,
     shuffleOptions: !!body.settings?.shuffleOptions,
+    gradingMode: body.settings?.gradingMode === "survey" ? "survey" : "graded",
+    multiScoring: body.settings?.multiScoring === "partial" ? "partial" : "exact",
     timerMode: ["none", "quiz", "question"].includes(body.settings?.timerMode) ? body.settings.timerMode : "none",
     maxMinutes: Number(body.settings?.maxMinutes) > 0 ? Number(body.settings.maxMinutes) : undefined,
     perQuestionSeconds: Number(body.settings?.perQuestionSeconds) > 0 ? Number(body.settings.perQuestionSeconds) : undefined,

@@ -3,7 +3,8 @@
  * https://github.com/ourbee
  */
 
-export type QType = "mcq" | "short" | "essay";
+/** The input control a question uses. Whether it is scored is a separate matter — see `graded`. */
+export type QType = "mcq" | "multi" | "short" | "essay";
 
 export interface Option {
   key: string; // "A".."F"
@@ -19,16 +20,31 @@ export interface Question {
   media?: string; // image / audio / YouTube URL
   options: Option[]; // empty for short/essay
   correct?: string; // option key, mcq only
-  points: number;
+  correctKeys?: string[]; // option keys, multi only
+  /**
+   * false = collected but never scored (opinion polls, surveys, work destined for
+   * peer review). Absent means graded, so quizzes saved before this existed still
+   * behave exactly as they did.
+   */
+  graded?: boolean;
+  points: number; // always 0 when graded is false
   feedbackCorrect?: string;
   feedbackIncorrect?: string;
 }
 
 export type TimerMode = "none" | "quiz" | "question";
 
+/** Whole-quiz stance on scoring. "survey" forces every question ungraded. */
+export type GradingMode = "graded" | "survey";
+
+/** How a multi-answer question is marked when the student's set is not exact. */
+export type MultiScoring = "exact" | "partial";
+
 export interface QuizSettings {
   shuffleQuestions: boolean;
   shuffleOptions: boolean;
+  gradingMode?: GradingMode; // absent === "graded"
+  multiScoring?: MultiScoring; // absent === "exact"
   timerMode: TimerMode;
   maxMinutes?: number; // timerMode "quiz"
   perQuestionSeconds?: number; // timerMode "question"
@@ -74,10 +90,12 @@ export interface GroupInfo {
 
 export interface PerQuestionResult {
   qid: string;
-  answer?: string;
-  correct?: boolean; // undefined when pending
+  answer?: string; // choice keys are comma-joined for multi ("A,C")
+  correct?: boolean; // full marks; undefined when pending or ungraded
   awarded: number;
   pending: boolean;
+  /** Collected but not scored — neither right, wrong, nor awaiting marking. */
+  ungraded?: boolean;
 }
 
 export interface AttemptFlags {
@@ -94,6 +112,8 @@ export interface ReviewPayload {
   score: number;
   max: number;
   pending: number;
+  /** Nothing in this quiz is scored — show a confirmation, not a mark. */
+  survey: boolean;
   flags: AttemptFlags;
   submittedAt: string;
 }
@@ -113,7 +133,9 @@ export interface RawQuestion {
   passage?: string;
   media?: string;
   options: { key: string; text: string; feedback?: string }[];
-  correct?: string;
+  correct?: string; // one key, or several ("A,C") for a multi-answer question
+  /** Explicit "this is not scored" from the file; type aliases can imply it too. */
+  graded?: string | boolean;
   points?: string | number;
   feedbackCorrect?: string;
   feedbackIncorrect?: string;

@@ -47,7 +47,8 @@ export function parseSheetRows(rows: Record<string, unknown>[]): ParsedQuiz {
       type: get("type", "questiontype"),
       passage: get("passage", "context"),
       media: get("mediaurl", "media", "imageurl", "image", "url"),
-      correct: get("correctanswer", "correct", "answer", "key"),
+      correct: get("correctanswer", "correct", "answer", "key", "correctanswers", "answers"),
+      graded: get("graded", "scored", "marked", "hascorrectanswer"),
       points: get("points", "marks", "score"),
       feedbackCorrect: get("feedbackcorrect", "correctfeedback"),
       feedbackIncorrect: get("feedbackincorrect", "feedbackwrong", "incorrectfeedback"),
@@ -90,6 +91,21 @@ export function parseWorkbookSheets(sheets: SheetInput[]): { sheet: string; quiz
   return found;
 }
 
+/**
+ * Read whichever "correct answer" field a JSON question uses. Multi-answer
+ * questions arrive as arrays (`"correct": ["A","C"]`); everything downstream
+ * expects one string, so arrays are joined.
+ */
+function readCorrect(item: Record<string, unknown>): string | undefined {
+  const value = item.correct ?? item.correctAnswer ?? item.correctAnswers ?? item.answer ?? item.answers;
+  if (value === undefined || value === null) return undefined;
+  if (Array.isArray(value)) {
+    const joined = value.map((v) => String(v).trim()).filter(Boolean).join(",");
+    return joined || undefined;
+  }
+  return String(value);
+}
+
 /** Parse a pasted/uploaded JSON quiz: either {title, description, questions:[...]} or a bare array. */
 export function parseJsonText(text: string): ParsedQuiz {
   const data = JSON.parse(text);
@@ -102,7 +118,8 @@ export function parseJsonText(text: string): ParsedQuiz {
       type: item.type !== undefined ? String(item.type) : undefined,
       passage: item.passage !== undefined ? String(item.passage) : undefined,
       media: (item.media ?? item.mediaUrl ?? item.imageUrl) !== undefined ? String(item.media ?? item.mediaUrl ?? item.imageUrl) : undefined,
-      correct: (item.correct ?? item.correctAnswer ?? item.answer) !== undefined ? String(item.correct ?? item.correctAnswer ?? item.answer) : undefined,
+      correct: readCorrect(item),
+      graded: item.graded as string | boolean | undefined,
       points: item.points as number | undefined,
       feedbackCorrect: item.feedbackCorrect !== undefined ? String(item.feedbackCorrect) : undefined,
       feedbackIncorrect: item.feedbackIncorrect !== undefined ? String(item.feedbackIncorrect) : undefined,
@@ -147,7 +164,7 @@ export function parseMarkdownText(text: string): ParsedQuiz {
   let current: RawQuestion | null = null;
   let append: ((s: string) => void) | null = null;
 
-  const keyRe = /^\s*(Q|Question|Type|Passage|Media|MediaURL|Correct|CorrectAnswer|Answer|Points|Marks|Title|Description|FeedbackCorrect|FeedbackIncorrect|F[A-F]|[A-F])\s*[:.)]\s?(.*)$/i;
+  const keyRe = /^\s*(Q|Question|Type|Passage|Media|MediaURL|Correct|CorrectAnswer|CorrectAnswers|Answer|Answers|Graded|Scored|Points|Marks|Title|Description|FeedbackCorrect|FeedbackIncorrect|F[A-F]|[A-F])\s*[:.)]\s?(.*)$/i;
 
   for (const line of text.split(/\r?\n/)) {
     const m = line.match(keyRe);
@@ -178,7 +195,9 @@ export function parseMarkdownText(text: string): ParsedQuiz {
         q.passage = value;
         append = (s) => (q.passage = `${q.passage} ${s}`);
       } else if (key === "MEDIA" || key === "MEDIAURL") q.media = value;
-      else if (key === "CORRECT" || key === "CORRECTANSWER" || key === "ANSWER") q.correct = value;
+      else if (key === "CORRECT" || key === "CORRECTANSWER" || key === "CORRECTANSWERS" || key === "ANSWER" || key === "ANSWERS")
+        q.correct = value;
+      else if (key === "GRADED" || key === "SCORED") q.graded = value;
       else if (key === "POINTS" || key === "MARKS") q.points = value;
       else if (key === "FEEDBACKCORRECT") {
         q.feedbackCorrect = value;

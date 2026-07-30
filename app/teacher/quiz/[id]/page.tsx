@@ -10,6 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
+import { correctKeysOf, isChoice, isGraded, isSurvey, splitKeys } from "@/lib/questions";
 import type { AttemptFlags, GroupInfo, PerQuestionResult, Question, QuizSettings, StudentInfo } from "@/lib/types";
 
 interface QuizRow {
@@ -96,19 +97,25 @@ export default function QuizDetailPage() {
       const dist: Record<string, number> = {};
       let answered = 0;
       let correct = 0;
+      let picks = 0; // ticks cast, which exceeds `answered` on multi-answer questions
       for (const a of attempts) {
         const per = a.per_question?.find((p) => p.qid === qn.id);
         if (!per?.answer) continue;
         answered++;
-        if (qn.type === "mcq") {
-          dist[per.answer] = (dist[per.answer] ?? 0) + 1;
+        if (isChoice(qn)) {
+          for (const key of qn.type === "multi" ? splitKeys(per.answer) : [per.answer]) {
+            dist[key] = (dist[key] ?? 0) + 1;
+            picks++;
+          }
           if (per.correct) correct++;
         }
       }
-      return { qn, answered, correct, dist };
+      return { qn, answered, correct, dist, picks };
     });
   }, [quiz, attempts]);
 
+  // A quiz with nothing to score has no meaningful average.
+  const survey = quiz ? quiz.settings.gradingMode === "survey" || isSurvey(quiz.questions) : false;
   const avg = attempts.length
     ? attempts.reduce((s, a) => s + (a.score ?? 0), 0) / attempts.length
     : 0;
@@ -157,7 +164,11 @@ export default function QuizDetailPage() {
       qs.forEach((qn, i) => {
         const per = a.per_question?.find((p) => p.qid === qn.id);
         const ans = per?.answer ?? "";
-        row[`Q${i + 1}`] = qn.type === "mcq" ? (ans ? `${ans}${per?.correct ? " ✓" : " ✗"}` : "—") : ans;
+        if (!isChoice(qn) || !isGraded(qn)) {
+          row[`Q${i + 1}`] = ans;
+          return;
+        }
+        row[`Q${i + 1}`] = ans ? `${ans}${per?.correct ? " ✓" : (per?.awarded ?? 0) > 0 ? ` ~${per?.awarded}` : " ✗"}` : "—";
       });
       return row;
     });
@@ -167,11 +178,12 @@ export default function QuizDetailPage() {
         No: `Q${i + 1}`,
         Question: qn.text,
         Type: qn.type,
-        CorrectAnswer: qn.correct ?? "",
+        Scored: isGraded(qn) ? "yes" : "no",
+        CorrectAnswer: correctKeysOf(qn).join(","),
         Points: qn.points,
         PercentCorrect: (() => {
           const st = analysis[i];
-          return st && st.answered && qn.type === "mcq" ? Math.round((st.correct / st.answered) * 100) : "";
+          return st && st.answered && isChoice(qn) && isGraded(qn) ? Math.round((st.correct / st.answered) * 100) : "";
         })(),
       }))
     );
@@ -232,7 +244,10 @@ export default function QuizDetailPage() {
       <div className="mt-6 grid grid-cols-3 gap-3 text-center">
         {[
           ["Responses", String(attempts.length)],
-          ["Average score", attempts.length ? `${Math.round(avg * 10) / 10} / ${attempts[0]?.max_score ?? ""}` : "—"],
+          [
+            survey ? "Not scored" : "Average score",
+            survey ? "—" : attempts.length ? `${Math.round(avg * 10) / 10} / ${attempts[0]?.max_score ?? ""}` : "—",
+          ],
           ["Flagged", String(attempts.filter((a) => a.flags?.late || duplicateIds.has(a.id)).length)],
         ].map(([label, value]) => (
           <div key={label} className="rounded-xl border border-slate-200 bg-white p-4">
@@ -263,7 +278,7 @@ export default function QuizDetailPage() {
                   <th className="px-4 py-2.5">{quiz.settings.groupMode ? "Group" : "Name"}</th>
                   <th className="px-4 py-2.5">{quiz.settings.groupMode ? "Members" : "Roll"}</th>
                   <th className="px-4 py-2.5">Sem</th>
-                  <th className="px-4 py-2.5">Score</th>
+                  <th className="px-4 py-2.5">{survey ? "Answered" : "Score"}</th>
                   <th className="px-4 py-2.5">Submitted</th>
                   <th className="px-4 py-2.5">Flags</th>
                 </tr>
@@ -280,7 +295,11 @@ export default function QuizDetailPage() {
                       <td className="px-4 py-2.5 font-medium text-slate-900">{a.group_info ? a.group_info.name : a.student.name}</td>
                       <td className="px-4 py-2.5">{a.group_info ? `${a.group_info.members.length} members` : a.student.rollNorm}</td>
                       <td className="px-4 py-2.5">{a.group_info ? a.group_info.semester : a.student.semester}</td>
-                      <td className="px-4 py-2.5 font-semibold">{a.score ?? 0} / {a.max_score ?? 0}</td>
+                      <td className="px-4 py-2.5 font-semibold">
+                        {survey
+                          ? `${a.per_question?.filter((p) => p.answer).length ?? 0} / ${quiz.questions.length}`
+                          : `${a.score ?? 0} / ${a.max_score ?? 0}`}
+                      </td>
                       <td className="px-4 py-2.5 text-slate-500">{new Date(a.submitted_at).toLocaleString()}</td>
                       <td className="px-4 py-2.5 space-x-1">
                         {a.flags?.late && <span className="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-xs font-medium">late</span>}
@@ -306,13 +325,22 @@ export default function QuizDetailPage() {
               )}
               {quiz.questions.map((qn, i) => {
                 const per = a.per_question?.find((p) => p.qid === qn.id);
+                const scored = isGraded(qn);
                 return (
                   <p key={qn.id} className="text-slate-700">
                     <span className="font-semibold">Q{i + 1}.</span>{" "}
-                    {qn.type === "mcq" ? (
+                    {isChoice(qn) ? (
                       <>
                         {per?.answer ?? "—"}{" "}
-                        {per?.answer ? (per.correct ? <span className="text-green-700">✓</span> : <span className="text-red-600">✗ (correct: {qn.correct})</span>) : null}
+                        {scored && per?.answer ? (
+                          per.correct ? (
+                            <span className="text-green-700">✓</span>
+                          ) : (
+                            <span className="text-red-600">
+                              {(per.awarded ?? 0) > 0 ? `partly right +${per.awarded}` : "✗"} (correct: {correctKeysOf(qn).join(", ")})
+                            </span>
+                          )
+                        ) : null}
                       </>
                     ) : (
                       <span className="italic">{per?.answer ?? "—"}</span>
@@ -331,40 +359,57 @@ export default function QuizDetailPage() {
           <p className="mt-2 text-sm text-slate-500">Appears once responses arrive.</p>
         ) : (
           <div className="mt-3 space-y-3">
-            {analysis.map(({ qn, answered, correct, dist }, i) => (
-              <div key={qn.id} className="rounded-xl border border-slate-200 bg-white p-4">
-                <p className="text-sm font-medium text-slate-900">
-                  <span className="text-slate-400 font-semibold">Q{i + 1}.</span> {qn.text}
-                </p>
-                {qn.type === "mcq" ? (
-                  <>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {answered} answered · {answered ? Math.round((correct / answered) * 100) : 0}% correct
-                    </p>
-                    <div className="mt-2 space-y-1">
-                      {qn.options.map((o) => {
-                        const n = dist[o.key] ?? 0;
-                        const pct = answered ? Math.round((n / answered) * 100) : 0;
-                        return (
-                          <div key={o.key} className="flex items-center gap-2 text-xs">
-                            <span className={`w-5 font-semibold ${o.key === qn.correct ? "text-green-700" : "text-slate-500"}`}>{o.key}</span>
-                            <div className="flex-1 h-4 rounded bg-slate-100 overflow-hidden">
-                              <div
-                                className={`h-full ${o.key === qn.correct ? "bg-green-500" : "bg-slate-400"}`}
-                                style={{ width: `${pct}%` }}
-                              />
+            {analysis.map(({ qn, answered, correct, dist }, i) => {
+              const scored = isGraded(qn);
+              const keys = scored ? correctKeysOf(qn) : [];
+              return (
+                <div key={qn.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-sm font-medium text-slate-900">
+                    <span className="text-slate-400 font-semibold">Q{i + 1}.</span> {qn.text}
+                  </p>
+                  {isChoice(qn) ? (
+                    <>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {answered} answered
+                        {scored && ` · ${answered ? Math.round((correct / answered) * 100) : 0}% got it fully right`}
+                        {qn.type === "multi" && " · several answers allowed, so the bars can total more than 100%"}
+                        {!scored && " · no correct answer, so this is the spread of opinion"}
+                      </p>
+                      <div className="mt-2 space-y-1">
+                        {qn.options.map((o) => {
+                          const n = dist[o.key] ?? 0;
+                          const pct = answered ? Math.round((n / answered) * 100) : 0;
+                          const right = keys.includes(o.key);
+                          return (
+                            <div key={o.key} className="flex items-center gap-2 text-xs">
+                              <span className={`w-5 font-semibold ${right ? "text-green-700" : "text-slate-500"}`}>{o.key}</span>
+                              <div className="h-4 flex-1 overflow-hidden rounded bg-slate-100">
+                                <div
+                                  className={`h-full ${right ? "bg-green-500" : scored ? "bg-slate-400" : "bg-blue-400"}`}
+                                  style={{ width: `${Math.min(100, pct)}%` }}
+                                />
+                              </div>
+                              <span className="w-16 text-right text-slate-500">{n} ({pct}%)</span>
                             </div>
-                            <span className="w-16 text-right text-slate-500">{n} ({pct}%)</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </>
-                ) : (
-                  <p className="mt-1 text-xs text-slate-500 italic">Typed answers — see the responses table or Excel export.</p>
-                )}
-              </div>
-            ))}
+                          );
+                        })}
+                      </div>
+                      <ul className="mt-2 space-y-0.5 text-xs text-slate-500">
+                        {qn.options.map((o) => (
+                          <li key={o.key}>
+                            <span className="font-semibold text-slate-600">{o.key}.</span> {o.text}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="mt-1 text-xs italic text-slate-500">
+                      {answered} typed answer{answered === 1 ? "" : "s"} — see the responses table or Excel export.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </section>

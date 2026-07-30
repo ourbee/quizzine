@@ -404,6 +404,7 @@ export function formToParsedQuiz(form: HarvestedForm): ParsedQuiz {
   const notes: string[] = [];
   let skippedIdentity = 0;
   let ungraded = 0;
+  let ungradedChoice = 0;
 
   for (const item of form.items) {
     if (item.kind === "other") continue;
@@ -438,13 +439,26 @@ export function formToParsedQuiz(form: HarvestedForm): ParsedQuiz {
       questions.push(question);
       continue;
     }
-    question.type = "mcq";
+
+    // A checkbox item accepts several ticks, so it maps to a multi-answer question.
+    question.type = item.kind === "checkbox" ? "multi" : "mcq";
     question.options = choices.slice(0, OPTION_KEYS.length).map((c, i) => ({ key: OPTION_KEYS[i], text: c.text.trim() }));
-    const correctIdx = choices.findIndex((c) => c.correct);
-    if (correctIdx >= 0 && correctIdx < OPTION_KEYS.length) question.correct = OPTION_KEYS[correctIdx];
-    const correctCount = choices.filter((c) => c.correct).length;
-    if (correctCount > 1) {
-      notes.push(`“${title.slice(0, 60)}…” had ${correctCount} correct choices; only the first is graded as correct.`);
+    const correctKeys = choices
+      .map((c, i) => (c.correct && i < OPTION_KEYS.length ? OPTION_KEYS[i] : null))
+      .filter((k): k is string => k !== null);
+
+    if (!correctKeys.length) {
+      // A Form that never calls createChoice(text, true) has no answer key at all —
+      // it is a survey or an opinion poll, not a quiz. Collect it without marking it.
+      question.graded = false;
+      question.points = undefined;
+      ungradedChoice += 1;
+    } else {
+      question.correct = correctKeys.join(",");
+      if (question.type === "mcq" && correctKeys.length > 1) {
+        question.type = "multi";
+        notes.push(`“${title.slice(0, 60)}…” had ${correctKeys.length} correct choices, so it is set to accept several answers.`);
+      }
     }
     questions.push(question);
   }
@@ -454,8 +468,26 @@ export function formToParsedQuiz(form: HarvestedForm): ParsedQuiz {
       `${skippedIdentity} student-information field${skippedIdentity > 1 ? "s were" : " was"} skipped — Quizzine collects name, roll number and semester itself.`
     );
   }
-  if (ungraded) {
-    notes.push(`${ungraded} typed-answer question${ungraded > 1 ? "s" : ""} carried no points in the Form; each is set to 1 point.`);
+
+  // A Form that never marks an answer correct and never sets points is not a
+  // quiz at all — it is a survey. Collect every answer, mark none of them.
+  const survey =
+    questions.length > 0 && !questions.some((qn) => qn.correct) && !form.items.some((it) => it.points && it.points > 0);
+  if (survey) {
+    for (const qn of questions) {
+      qn.graded = false;
+      qn.points = undefined;
+    }
+    notes.push("This Form marks no answers as correct, so it is set up as a survey — responses are collected but not scored.");
+  } else {
+    if (ungraded) {
+      notes.push(`${ungraded} typed-answer question${ungraded > 1 ? "s" : ""} carried no points in the Form; each is set to 1 point.`);
+    }
+    if (ungradedChoice) {
+      notes.push(
+        `${ungradedChoice} choice question${ungradedChoice > 1 ? "s have" : " has"} no correct answer marked in the Form, so ${ungradedChoice > 1 ? "they are" : "it is"} collected without being scored. Set an answer below if that is wrong.`
+      );
+    }
   }
 
   return {

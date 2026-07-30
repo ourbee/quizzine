@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
+import { isGraded, isSurvey, maxPoints } from "@/lib/questions";
 import type { Question, QuizSettings } from "@/lib/types";
 
 // Returns quiz metadata always; question content only while the quiz is open,
@@ -27,6 +28,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
   const closed = !quiz.accepting || (settings.closesAt ? Date.now() > new Date(settings.closesAt).getTime() : false);
 
   const questions = quiz.questions as Question[];
+  // Whether a question is scored is safe to reveal; which option is right is not.
   const sanitized = questions.map((qn) => ({
     id: qn.id,
     type: qn.type,
@@ -34,6 +36,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
     passage: qn.passage,
     media: qn.media,
     points: qn.points,
+    graded: isGraded(qn),
     options: qn.options.map((o) => ({ key: o.key, text: o.text })),
   }));
 
@@ -53,9 +56,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
       groupMode: settings.groupMode,
       groupMin: settings.groupMin,
       groupMax: settings.groupMax,
+      multiScoring: settings.multiScoring,
     },
     questionCount: questions.length,
-    totalPoints: questions.reduce((s, qn) => s + qn.points, 0),
+    totalPoints: maxPoints(questions),
+    survey: settings.gradingMode === "survey" || isSurvey(questions),
     closed,
     questions: closed ? [] : sanitized,
   });

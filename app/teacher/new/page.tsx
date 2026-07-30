@@ -12,9 +12,10 @@ import QRCode from "qrcode";
 import { parseJsonText, parsePastedText, parseWorkbookSheets } from "@/lib/parsers";
 import { looksLikeAppsScript, parseAppsScript } from "@/lib/appsscript";
 import { validateQuestions } from "@/lib/validate";
+import { correctKeysOf, isGraded } from "@/lib/questions";
 import { AI_PROMPT } from "@/lib/aiprompt";
 import { THEMES } from "@/lib/themes";
-import type { ParsedQuiz, Question, TimerMode } from "@/lib/types";
+import type { GradingMode, MultiScoring, ParsedQuiz, Question, TimerMode } from "@/lib/types";
 import Media from "@/components/Media";
 
 type Step = "intake" | "review" | "settings" | "done";
@@ -23,6 +24,11 @@ type Step = "intake" | "review" | "settings" | "done";
 interface Draft {
   id: string;
   source: string;
+  /** Kept so the scored/survey switch can re-run validation over the same file. */
+  parsed: ParsedQuiz;
+  gradingMode: GradingMode;
+  /** The file implied a survey rather than the teacher choosing one. */
+  autoSurvey: boolean;
   title: string;
   description: string;
   questions: Question[];
@@ -45,6 +51,15 @@ const TEMPLATE_HEADERS = [
   "Points", "MediaURL", "Passage",
 ];
 
+// Shown on the intake screen so the Type column is self-explanatory.
+const TYPE_GUIDE: { type: string; what: string }[] = [
+  { type: "mcq", what: "one correct answer, auto-marked" },
+  { type: "multi", what: "several correct answers — put every letter in CorrectAnswer, e.g. A,C" },
+  { type: "short / essay", what: "typed answer you mark later" },
+  { type: "poll", what: "options with no correct answer — collected, never marked" },
+  { type: "open", what: "typed answer with no correct answer, e.g. a reflection or peer-reviewed task" },
+];
+
 const TEMPLATE_ROWS = [
   {
     Question: "Which word is a synonym of 'ubiquitous'?",
@@ -62,7 +77,40 @@ const TEMPLATE_ROWS = [
     CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
     Points: 2, MediaURL: "", Passage: "",
   },
+  {
+    Question: "Which of these are figures of speech? Tick all that apply.",
+    Type: "multi", OptionA: "Metonymy", OptionB: "Iambic pentameter", OptionC: "Synecdoche", OptionD: "Quatrain",
+    CorrectAnswer: "A,C",
+    FeedbackA: "Correct: metonymy substitutes a closely associated term for the thing meant.",
+    FeedbackB: "Iambic pentameter is a metre — a matter of rhythm, not of figurative meaning.",
+    FeedbackC: "Correct: synecdoche lets a part stand for the whole, or the whole for a part.",
+    FeedbackD: "A quatrain is a four-line stanza, a unit of form rather than a figure of speech.",
+    Points: 2, MediaURL: "", Passage: "",
+  },
+  {
+    Question: "Which of these poets did you find most rewarding to read this term?",
+    Type: "poll", OptionA: "Kamala Das", OptionB: "A. K. Ramanujan", OptionC: "Arun Kolatkar", OptionD: "Eunice de Souza",
+    CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
+    Points: "", MediaURL: "", Passage: "",
+  },
+  {
+    Question: "What is one thing from this term's reading you would like to discuss further in class?",
+    Type: "open", OptionA: "", OptionB: "", OptionC: "", OptionD: "",
+    CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
+    Points: "", MediaURL: "", Passage: "",
+  },
 ];
+
+/**
+ * A file whose choice questions carry no answer key at all is a survey, not a
+ * quiz with missing answers. Typed-answer questions never have a key, so they
+ * are not evidence either way — a quiz of essays alone stays scored.
+ */
+function looksLikeSurvey(parsed: ParsedQuiz): boolean {
+  const choice = parsed.questions.filter((qn) => qn.options.some((o) => (o.text ?? "").toString().trim() !== ""));
+  if (!choice.length) return false;
+  return choice.every((qn) => (qn.correct ?? "").toString().trim() === "");
+}
 
 export default function NewQuizPage() {
   const [step, setStep] = useState<Step>("intake");
@@ -85,6 +133,7 @@ export default function NewQuizPage() {
   const [perQuestionSeconds, setPerQuestionSeconds] = useState("45");
   const [closesAt, setClosesAt] = useState("");
   const [allowMultiple, setAllowMultiple] = useState(false);
+  const [multiScoring, setMultiScoring] = useState<MultiScoring>("exact");
   const [introMedia, setIntroMedia] = useState("");
   const [groupMode, setGroupMode] = useState(false);
   const [groupMin, setGroupMin] = useState("2");
@@ -96,6 +145,10 @@ export default function NewQuizPage() {
 
   const selected = useMemo(() => drafts.filter((d) => d.include), [drafts]);
   const ready = selected.length > 0 && selected.every((d) => d.errors.length === 0 && d.title.trim() && d.questions.length > 0);
+  const hasMultiQuestions = useMemo(
+    () => selected.some((d) => d.questions.some((qn) => qn.type === "multi" && isGraded(qn))),
+    [selected]
+  );
 
   function updateDraft(id: string, patch: Partial<Draft>) {
     setDrafts((list) => list.map((d) => (d.id === id ? { ...d, ...patch } : d)));
@@ -106,11 +159,16 @@ export default function NewQuizPage() {
     const many = list.length > 1;
     const stamp = Date.now();
     const built: Draft[] = list.map((parsed, i) => {
-      const result = validateQuestions(parsed);
+      const autoSurvey = looksLikeSurvey(parsed);
+      const gradingMode: GradingMode = autoSurvey ? "survey" : "graded";
+      const result = validateQuestions(parsed, gradingMode);
       const fallback = fallbackTitle ? (many ? `${fallbackTitle} — ${i + 1}` : fallbackTitle) : "";
       return {
         id: `d${stamp}-${i}`,
         source: sources[i] ?? "",
+        parsed,
+        gradingMode,
+        autoSurvey,
         title: parsed.title?.trim() || fallback,
         description: parsed.description ?? "",
         questions: result.questions,
@@ -122,6 +180,25 @@ export default function NewQuizPage() {
     });
     setDrafts(built);
     setStep("review");
+  }
+
+  /** Re-run validation for one draft after the teacher flips scored ↔ survey. */
+  function setGradingMode(id: string, gradingMode: GradingMode) {
+    setDrafts((list) =>
+      list.map((d) => {
+        if (d.id !== id) return d;
+        const result = validateQuestions(d.parsed, gradingMode);
+        return {
+          ...d,
+          gradingMode,
+          autoSurvey: false,
+          questions: result.questions,
+          errors: result.errors,
+          warnings: [...result.warnings, ...(d.parsed.notes ?? [])],
+          include: result.errors.length === 0 && d.include,
+        };
+      })
+    );
   }
 
   async function handleFile(file: File) {
@@ -207,6 +284,7 @@ export default function NewQuizPage() {
     const settings = {
       shuffleQuestions,
       shuffleOptions,
+      multiScoring,
       timerMode,
       maxMinutes: timerMode === "quiz" ? Number(maxMinutes) : undefined,
       perQuestionSeconds: timerMode === "question" ? Number(perQuestionSeconds) : undefined,
@@ -230,7 +308,8 @@ export default function NewQuizPage() {
             introMedia,
             questions: draft.questions,
             theme,
-            settings,
+            // Scored vs survey is a property of the questions, so it travels per quiz.
+            settings: { ...settings, gradingMode: draft.gradingMode },
           }),
         });
         if (!res.ok) {
@@ -257,6 +336,35 @@ export default function NewQuizPage() {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const liveOnes = published.filter((p) => p.slug);
   const failedOnes = published.filter((p) => p.error);
+
+  function jumpTo(draftId: string) {
+    document.getElementById(`draft-${draftId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  const totalErrors = drafts.reduce((n, d) => n + d.errors.length, 0);
+  const reviewActions = (
+    <div className="flex flex-wrap items-center gap-3">
+      <button onClick={() => setStep("intake")} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+        ← Back
+      </button>
+      <button
+        onClick={() => setStep("settings")}
+        disabled={!ready}
+        className="rounded-lg bg-blue-700 px-5 py-2 text-sm text-white font-semibold hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Continue to settings →
+      </button>
+      <p className="text-xs text-slate-500">
+        {ready
+          ? `${selected.length} quiz${selected.length === 1 ? "" : "zes"} ready · ${selected.reduce((n, d) => n + d.questions.length, 0)} questions`
+          : selected.length === 0
+            ? "Tick at least one quiz to continue."
+            : totalErrors > 0
+              ? `${totalErrors} error${totalErrors === 1 ? "" : "s"} to clear before you can continue.`
+              : "Give every selected quiz a title to continue."}
+      </p>
+    </div>
+  );
 
   return (
     <main className="max-w-3xl mx-auto px-6 py-10 w-full">
@@ -299,6 +407,20 @@ export default function NewQuizPage() {
             {showPrompt && (
               <pre className="mt-3 max-h-72 overflow-auto rounded-lg bg-white border border-blue-200 p-3 text-xs whitespace-pre-wrap text-slate-700">{AI_PROMPT}</pre>
             )}
+            <details className="mt-3">
+              <summary className="cursor-pointer text-sm font-semibold text-blue-800">What can go in the Type column?</summary>
+              <ul className="mt-2 space-y-1 text-sm text-blue-900">
+                {TYPE_GUIDE.map((t) => (
+                  <li key={t.type}>
+                    <code className="rounded bg-white px-1.5 py-0.5 text-xs font-semibold text-blue-800">{t.type}</code> — {t.what}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-blue-800">
+                A whole quiz can be marked as having no correct answers on the next screen — useful for surveys, opinion
+                polls and work you intend to have peer-reviewed.
+              </p>
+            </details>
           </div>
 
           <div className="flex gap-2 text-sm font-semibold">
@@ -360,6 +482,11 @@ export default function NewQuizPage() {
 
       {step === "review" && (
         <section className="mt-8 space-y-5">
+          {/* Repeated top and bottom so a long list never has to be scrolled to act on. */}
+          <div className="sticky top-0 z-20 -mx-6 border-b border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
+            {reviewActions}
+          </div>
+
           {drafts.length > 1 && (
             <div className="rounded-xl border border-slate-200 bg-white p-4">
               <p className="font-semibold text-slate-900">{drafts.length} quizzes found in this file</p>
@@ -367,7 +494,7 @@ export default function NewQuizPage() {
                 Each one is published separately, with its own link and QR code, sharing the settings you pick next.
                 Untick any you do not want, and edit the titles students will see.
               </p>
-              <div className="mt-3 flex gap-2 text-xs font-semibold">
+              <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
                 <button
                   onClick={() => setDrafts((list) => list.map((d) => ({ ...d, include: d.errors.length === 0 })))}
                   className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100"
@@ -380,16 +507,52 @@ export default function NewQuizPage() {
                 >
                   Clear selection
                 </button>
+                <button
+                  onClick={() => setDrafts((list) => list.map((d) => ({ ...d, open: true })))}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100"
+                >
+                  Expand all
+                </button>
+                <button
+                  onClick={() => setDrafts((list) => list.map((d) => ({ ...d, open: false })))}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100"
+                >
+                  Collapse all
+                </button>
+              </div>
+              <div className="mt-3 border-t border-slate-100 pt-3">
+                <p className="text-xs font-semibold text-slate-400">Jump to</p>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {drafts.map((d, i) => (
+                    <button
+                      key={d.id}
+                      onClick={() => jumpTo(d.id)}
+                      title={d.title || `Quiz ${i + 1}`}
+                      className={`max-w-52 truncate rounded-lg border px-2.5 py-1 text-xs font-medium ${
+                        d.errors.length
+                          ? "border-red-300 bg-red-50 text-red-700"
+                          : d.include
+                            ? "border-slate-300 text-slate-700 hover:bg-slate-100"
+                            : "border-slate-200 text-slate-400 hover:bg-slate-50"
+                      }`}
+                    >
+                      {i + 1}. {d.title || "Untitled"}
+                      {d.errors.length > 0 && " ⚠"}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           )}
 
           {drafts.map((draft, idx) => {
             const points = draft.questions.reduce((s, qn) => s + qn.points, 0);
+            const survey = draft.gradingMode === "survey";
             return (
               <div
                 key={draft.id}
-                className={`rounded-xl border bg-white p-4 ${draft.include ? "border-slate-300" : "border-slate-200 opacity-70"}`}
+                id={`draft-${draft.id}`}
+                className={`scroll-mt-24 rounded-xl border bg-white p-4 ${draft.include ? "border-slate-300" : "border-slate-200 opacity-70"}`}
               >
                 <div className="flex items-start gap-3">
                   {drafts.length > 1 && (
@@ -418,6 +581,34 @@ export default function NewQuizPage() {
                       className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
 
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-800">Marking</p>
+                        {([["graded", "Scored quiz"], ["survey", "No correct answers"]] as [GradingMode, string][]).map(([mode, label]) => (
+                          <button
+                            key={mode}
+                            onClick={() => setGradingMode(draft.id, mode)}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                              draft.gradingMode === mode ? "bg-slate-900 text-white" : "bg-white border border-slate-300 text-slate-600 hover:bg-slate-100"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-2 text-xs text-slate-600">
+                        {survey
+                          ? "Answers are collected but never marked. Students see a confirmation instead of a score, and you get the response spread for every question."
+                          : "Questions with an answer key are marked automatically; typed answers wait for you. Individual questions can still be left unscored with Type “poll” or “open”."}
+                      </p>
+                      {draft.autoSurvey && (
+                        <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                          No correct answers were found in this file, so it has been set up as a survey. If the answer key
+                          is simply missing, switch to “Scored quiz” to see what needs filling in.
+                        </p>
+                      )}
+                    </div>
+
                     {draft.errors.length > 0 && (
                       <div className="rounded-xl border border-red-200 bg-red-50 p-3">
                         <p className="font-semibold text-red-800 text-sm">Fix these before publishing ({draft.errors.length})</p>
@@ -437,7 +628,8 @@ export default function NewQuizPage() {
 
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm text-slate-500">
-                        {draft.questions.length} question{draft.questions.length === 1 ? "" : "s"} · {points} point{points === 1 ? "" : "s"}
+                        {draft.questions.length} question{draft.questions.length === 1 ? "" : "s"} ·{" "}
+                        {points === 0 ? "not scored" : `${points} point${points === 1 ? "" : "s"}`}
                       </p>
                       <button
                         onClick={() => updateDraft(draft.id, { open: !draft.open })}
@@ -453,27 +645,47 @@ export default function NewQuizPage() {
                           This is how they will read (correct answers marked here only — students never receive them before submitting).
                         </p>
                         <div className="space-y-4">
-                          {draft.questions.map((qn, i) => (
-                            <div key={qn.id} className="rounded-xl border border-slate-200 bg-white p-4">
-                              <p className="text-xs font-semibold text-slate-400">Q{i + 1} · {qn.type.toUpperCase()} · {qn.points} pt</p>
-                              {qn.passage && <p className="mt-2 text-sm bg-slate-50 border border-slate-200 rounded-lg p-3 text-slate-700">{qn.passage}</p>}
-                              <p className="mt-1.5 font-medium text-slate-900">{qn.text}</p>
-                              <Media url={qn.media} compact />
-                              {qn.type === "mcq" ? (
-                                <ul className="mt-2 space-y-1.5">
-                                  {qn.options.map((o) => (
-                                    <li key={o.key} className={`text-sm rounded-lg px-3 py-1.5 border ${o.key === qn.correct ? "border-green-300 bg-green-50 text-green-900" : "border-slate-200 text-slate-700"}`}>
-                                      <span className="font-semibold">{o.key}.</span> {o.text}
-                                      {o.key === qn.correct && <span className="ml-1 text-xs font-semibold">✓ correct</span>}
-                                      {o.feedback && <p className="text-xs text-slate-500 mt-0.5">↳ {o.feedback}</p>}
-                                    </li>
-                                  ))}
-                                </ul>
-                              ) : (
-                                <p className="mt-2 text-sm italic text-slate-500">Typed answer — graded by you later.</p>
-                              )}
-                            </div>
-                          ))}
+                          {draft.questions.map((qn, i) => {
+                            const scored = isGraded(qn);
+                            const keys = correctKeysOf(qn);
+                            return (
+                              <div key={qn.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                                <p className="text-xs font-semibold text-slate-400">
+                                  Q{i + 1} · {qn.type === "multi" ? "MULTI-ANSWER" : qn.type.toUpperCase()} ·{" "}
+                                  {scored ? `${qn.points} pt` : "not scored"}
+                                </p>
+                                {qn.passage && <p className="mt-2 text-sm bg-slate-50 border border-slate-200 rounded-lg p-3 text-slate-700">{qn.passage}</p>}
+                                <p className="mt-1.5 font-medium text-slate-900">{qn.text}</p>
+                                <Media url={qn.media} compact />
+                                {qn.type === "mcq" || qn.type === "multi" ? (
+                                  <>
+                                    {qn.type === "multi" && scored && (
+                                      <p className="mt-2 text-xs font-semibold text-blue-700">
+                                        Students tick all that apply — {keys.length} correct answers.
+                                      </p>
+                                    )}
+                                    <ul className="mt-2 space-y-1.5">
+                                      {qn.options.map((o) => {
+                                        const right = scored && keys.includes(o.key);
+                                        return (
+                                          <li key={o.key} className={`text-sm rounded-lg px-3 py-1.5 border ${right ? "border-green-300 bg-green-50 text-green-900" : "border-slate-200 text-slate-700"}`}>
+                                            <span className="font-semibold">{o.key}.</span> {o.text}
+                                            {right && <span className="ml-1 text-xs font-semibold">✓ correct</span>}
+                                            {o.feedback && <p className="text-xs text-slate-500 mt-0.5">↳ {o.feedback}</p>}
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                    {!scored && <p className="mt-2 text-xs italic text-slate-500">No correct answer — responses are collected only.</p>}
+                                  </>
+                                ) : (
+                                  <p className="mt-2 text-sm italic text-slate-500">
+                                    {scored ? "Typed answer — graded by you later." : "Typed answer — collected, not graded."}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       </>
                     )}
@@ -483,24 +695,25 @@ export default function NewQuizPage() {
             );
           })}
 
-          <div className="flex gap-3">
-            <button onClick={() => setStep("intake")} className="rounded-lg border border-slate-300 px-5 py-2.5 font-semibold text-slate-700 hover:bg-slate-100">
-              ← Back
-            </button>
-            <button
-              onClick={() => setStep("settings")}
-              disabled={!ready}
-              className="rounded-lg bg-blue-700 px-5 py-2.5 text-white font-semibold hover:bg-blue-800 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Continue to settings →
-            </button>
-          </div>
-          {!ready && (
-            <p className="text-xs text-slate-500">
-              {selected.length === 0
-                ? "Tick at least one quiz to continue."
-                : "Give every selected quiz a title, and clear the errors above, to continue."}
-            </p>
+          <div className="rounded-xl border border-slate-200 bg-white p-4">{reviewActions}</div>
+
+          {drafts.length > 2 && (
+            <div className="fixed bottom-5 right-4 flex flex-col gap-2">
+              <button
+                onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                aria-label="Jump to top"
+                className="h-11 w-11 rounded-full bg-slate-900 text-lg font-bold text-white shadow-lg hover:bg-slate-700"
+              >
+                ↑
+              </button>
+              <button
+                onClick={() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" })}
+                aria-label="Jump to bottom"
+                className="h-11 w-11 rounded-full bg-slate-900 text-lg font-bold text-white shadow-lg hover:bg-slate-700"
+              >
+                ↓
+              </button>
+            </div>
           )}
         </section>
       )}
@@ -577,6 +790,28 @@ export default function NewQuizPage() {
               Allow multiple attempts per roll number
             </label>
           </div>
+
+          {hasMultiQuestions && (
+            <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+              <p className="font-semibold text-slate-900 text-sm">Marking multiple-answer questions</p>
+              <div className="flex flex-wrap gap-2 text-sm">
+                {([["exact", "All or nothing"], ["partial", "Partial credit"]] as [MultiScoring, string][]).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    onClick={() => setMultiScoring(mode)}
+                    className={`rounded-lg px-4 py-2 font-medium ${multiScoring === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500">
+                {multiScoring === "exact"
+                  ? "Full marks only when the student ticks exactly the right set — nothing otherwise. The simplest rule to explain."
+                  : "Each correct tick earns a share of the marks and each wrong tick cancels one, never going below zero — so ticking everything scores nothing."}
+              </p>
+            </div>
+          )}
 
           <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
             <p className="font-semibold text-slate-900 text-sm">Timer</p>

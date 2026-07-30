@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { grade } from "@/lib/grade";
+import { isSurvey } from "@/lib/questions";
 import type { AttemptFlags, GroupInfo, PerQuestionResult, Question, QuizSettings, ReviewPayload, StudentInfo } from "@/lib/types";
 
 const GRACE_MS = 45_000; // network/clock grace before a submission is flagged late
@@ -37,6 +38,7 @@ export async function POST(req: NextRequest) {
   if (!quizzes.length) return NextResponse.json({ error: "Quiz not found." }, { status: 404 });
   const quiz = quizzes[0];
   const questions = quiz.questions as Question[];
+  const survey = quiz.settings?.gradingMode === "survey" || isSurvey(questions);
 
   // Idempotent: a second submit (double-click, refresh) returns the stored result.
   if (attempt.status === "submitted" && attempt.per_question) {
@@ -51,6 +53,7 @@ export async function POST(req: NextRequest) {
       score: attempt.score ?? 0,
       max: attempt.max_score ?? 0,
       pending,
+      survey,
       flags: attempt.flags ?? {},
       submittedAt: attempt.submitted_at ?? new Date().toISOString(),
     };
@@ -58,9 +61,9 @@ export async function POST(req: NextRequest) {
   }
 
   const answers: Record<string, string> = body.answers && typeof body.answers === "object" ? body.answers : {};
-  const { per, score, max, pending } = grade(questions, answers);
-
   const settings = quiz.settings;
+  const { per, score, max, pending } = grade(questions, answers, settings.multiScoring ?? "exact");
+
   const startedAt = new Date(attempt.started_at).getTime();
   const now = Date.now();
   let deadline: number | undefined;
@@ -89,6 +92,7 @@ export async function POST(req: NextRequest) {
     score,
     max,
     pending,
+    survey,
     flags,
     submittedAt,
   };

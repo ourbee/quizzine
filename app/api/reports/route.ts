@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     : [];
   if (!ids.length) return NextResponse.json({ error: "Pick at least one quiz." }, { status: 400 });
 
-  const quizzes = await q<ReportQuiz & { settings: { groupMode?: boolean } }>(
+  const quizzes = await q<ReportQuiz & { settings: { groupMode?: boolean; gradingMode?: string } }>(
     `SELECT id, title, created_at, settings FROM quizzes
       WHERE owner = $1 AND id = ANY($2::text[])
       ORDER BY created_at ASC`,
@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
       title: z.title,
       created_at: z.created_at,
       group_mode: !!z.settings?.groupMode,
+      scored: z.settings?.gradingMode !== "survey",
     })),
     attempts,
   });

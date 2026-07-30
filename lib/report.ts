@@ -79,6 +79,8 @@ export interface ReportQuiz {
   title: string;
   created_at: string;
   group_mode: boolean;
+  /** false for surveys and other unscored quizzes; absent means scored. */
+  scored?: boolean;
 }
 
 export interface ReportAttempt {
@@ -217,7 +219,10 @@ export function buildReport(
   options: ReportOptions
 ): Report {
   const bands = normalizeBands(options.bands);
-  const quizIds = quizzes.map((z) => z.id);
+  // A survey carries no marks, so including it would drag every average towards
+  // zero. Unscored quizzes are dropped before anything is totalled.
+  const scoredQuizzes = quizzes.filter((z) => z.scored !== false);
+  const quizIds = scoredQuizzes.map((z) => z.id);
   const quizSet = new Set(quizIds);
   const relevant = attempts.filter((a) => quizSet.has(a.quiz_id));
 
@@ -357,7 +362,7 @@ export function buildReport(
   );
 
   return {
-    quizzes,
+    quizzes: scoredQuizzes,
     students: inScope,
     semesters,
     overall: inScope.length ? summarise(inScope, 0) : null,
