@@ -92,9 +92,11 @@ export interface Pair {
 }
 
 /**
- * Assign reviewers so every response is marked `perResponse` times and the work
- * is spread as evenly as possible. Existing pairs are kept — a teacher can run
- * this again after late submissions arrive and only the gaps are filled.
+ * Assign reviewers so every response is marked `perResponse` times and everyone
+ * does that much marking themselves. Existing pairs are kept — a teacher can run
+ * this again after late submissions arrive and only the gaps are filled. Topping
+ * up can push a response one over `perResponse`, which is the price of making
+ * sure a latecomer is given work as well as given marks.
  *
  * Nobody is ever given their own work. With fewer students than
  * `perResponse + 1`, everyone simply reviews everyone else.
@@ -137,6 +139,24 @@ export function topUpAllocation(attemptIds: string[], existing: Pair[], perRespo
       received.set(attemptId, (received.get(attemptId) ?? 0) + 1);
       load.set(candidate, (load.get(candidate) ?? 0) + 1);
       added.push({ attemptId, reviewerAttemptId: candidate });
+    }
+  }
+
+  // Filling the received side alone leaves a late submitter marked by others but
+  // never marking anyone — and then losing the completion marks for reviewing.
+  // So give anyone still short of their quota work to do, taking the responses
+  // with the fewest reviewers first. A few responses end up with one reviewer
+  // more than asked for, which only ever means more feedback.
+  for (const reviewerAttemptId of ids) {
+    while ((load.get(reviewerAttemptId) ?? 0) < wanted) {
+      const candidate = ids
+        .filter((a) => a !== reviewerAttemptId && !taken.has(`${a}|${reviewerAttemptId}`))
+        .sort((a, b) => (received.get(a) ?? 0) - (received.get(b) ?? 0) || a.localeCompare(b))[0];
+      if (!candidate) break; // they are already reviewing everybody else
+      taken.add(`${candidate}|${reviewerAttemptId}`);
+      received.set(candidate, (received.get(candidate) ?? 0) + 1);
+      load.set(reviewerAttemptId, (load.get(reviewerAttemptId) ?? 0) + 1);
+      added.push({ attemptId: candidate, reviewerAttemptId });
     }
   }
   return added;

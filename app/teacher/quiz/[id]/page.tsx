@@ -361,7 +361,9 @@ export default function QuizDetailPage() {
         })()}
       </section>
 
-      {quiz.settings.gradingMode === "peer" && <PeerReviewPanel quizId={quiz.id} onPhaseChange={load} />}
+      {quiz.settings.gradingMode === "peer" && (
+        <PeerReviewPanel quizId={quiz.id} slug={quiz.slug} onPhaseChange={load} />
+      )}
 
       <section className="mt-10">
         <h2 className="font-bold text-slate-900">Item analysis</h2>

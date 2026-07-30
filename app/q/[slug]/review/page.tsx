@@ -5,11 +5,12 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { getTheme } from "@/lib/themes";
 import { NO_SEMESTER, SEMESTER_CHOICES } from "@/lib/normalize";
 import type { PeerCriterion } from "@/lib/peer";
+import type { ReviewPayload } from "@/lib/types";
 
 interface Task {
   reviewId: string;
@@ -50,6 +51,7 @@ export default function PeerReviewPage() {
   const [comments, setComments] = useState<Record<string, string>>({});
   const [saveError, setSaveError] = useState("");
   const [justSaved, setJustSaved] = useState(false);
+  const attempted = useRef(false);
 
   const theme = getTheme(session?.theme ?? "slate");
   const draftKey = session ? `qz-peer-${slug}-${session.reviewerAttemptId}` : "";
@@ -85,23 +87,54 @@ export default function PeerReviewPage() {
     );
   }, [session, task, scores, comments]);
 
-  async function signIn(e: React.FormEvent) {
+  const open = useCallback(
+    async (rollValue: string, semesterValue: string, quiet = false) => {
+      setBusy(true);
+      setError("");
+      const res = await fetch("/api/peer/lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug, roll: rollValue, semester: semesterValue }),
+      });
+      setBusy(false);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // A silent attempt that fails just leaves the form filled in for them.
+        if (!quiet) setError(data.error ?? "Could not open your reviews.");
+        return;
+      }
+      setSession(data);
+      setActive(Math.max(0, data.tasks.findIndex((t: Task) => t.status !== "submitted")));
+    },
+    [slug]
+  );
+
+  /**
+   * This device already submitted a response, so it knows who this is. Fill the
+   * form in from the stored result and try it straight away — the student came
+   * here from a button on their own result page and should not have to prove
+   * who they are twice.
+   */
+  useEffect(() => {
+    if (attempted.current) return;
+    attempted.current = true;
+    let saved: ReviewPayload | null = null;
+    try {
+      const raw = localStorage.getItem(`qd-review-${slug}`);
+      if (raw) saved = JSON.parse(raw);
+    } catch {}
+    if (!saved) return;
+    const savedRoll = saved.group ? (saved.group.members[0]?.roll ?? "") : saved.student.rollNorm;
+    const savedSemester = saved.group ? saved.group.semester : saved.student.semester;
+    if (!savedRoll || savedSemester === undefined || savedSemester === null) return;
+    setRoll(String(savedRoll));
+    setSemester(String(savedSemester));
+    open(String(savedRoll), String(savedSemester), true);
+  }, [slug, open]);
+
+  function signIn(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true);
-    setError("");
-    const res = await fetch("/api/peer/lookup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slug, roll, semester }),
-    });
-    setBusy(false);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setError(data.error ?? "Could not open your reviews.");
-      return;
-    }
-    setSession(data);
-    setActive(Math.max(0, data.tasks.findIndex((t: Task) => t.status !== "submitted")));
+    open(roll, semester);
   }
 
   async function submitReview() {
@@ -227,7 +260,7 @@ export default function PeerReviewPage() {
       </div>
 
       <main className="mx-auto mt-6 max-w-2xl space-y-5 px-4">
-        {session.tasks.length === 0 && (
+        {session.tasks.length === 0 && session.questions.length > 0 && (
           <div className="rounded-2xl border p-6 text-center shadow-sm" style={cardStyle}>
             <p className="font-semibold">Nothing to review yet</p>
             <p className="mt-1 text-sm" style={{ color: theme.muted }}>
@@ -236,7 +269,17 @@ export default function PeerReviewPage() {
           </div>
         )}
 
-        {session.tasks.length > 0 && (
+        {/* Peers mark written work; a quiz of nothing but choice questions is marked by the app itself. */}
+        {session.questions.length === 0 && (
+          <div className="rounded-2xl border p-6 text-center shadow-sm" style={cardStyle}>
+            <p className="font-semibold">Nothing here for you to mark</p>
+            <p className="mt-1 text-sm" style={{ color: theme.muted }}>
+              This quiz has no written answers — every question is multiple choice, and those are marked automatically.
+            </p>
+          </div>
+        )}
+
+        {session.tasks.length > 0 && session.questions.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {session.tasks.map((t, i) => (
               <button
@@ -255,7 +298,7 @@ export default function PeerReviewPage() {
           </div>
         )}
 
-        {allDone && session.tasks.length > 0 && (
+        {allDone && session.tasks.length > 0 && session.questions.length > 0 && (
           <div className="rounded-2xl border-2 p-4 text-sm" style={{ borderColor: theme.accent, background: theme.accentSoft }}>
             All your reviews are in — thank you. You can still revise any of them until your teacher closes the quiz.
           </div>
@@ -331,7 +374,7 @@ export default function PeerReviewPage() {
             </div>
           ))}
 
-        {task && (
+        {task && session.questions.length > 0 && (
           <div className="rounded-2xl border p-5 text-center shadow-sm" style={cardStyle}>
             {saveError && <p className="mb-2 text-sm text-red-600">{saveError}</p>}
             {justSaved && <p className="mb-2 text-sm font-semibold text-green-700">Review sent ✓</p>}

@@ -68,8 +68,37 @@ test("a late submission is slotted in without disturbing existing assignments", 
   const all = [...first, ...withLatecomer];
   const received = countBy(all, "attemptId");
   assert.equal(received.get("a06"), 2, "the newcomer's work is reviewed too");
-  for (const id of ids(5)) assert.equal(received.get(id), 2);
+  // Everyone keeps the two reviewers they were promised; making room for the
+  // latecomer's own marking may give one or two of them a third.
+  for (const id of ids(5)) assert.ok((received.get(id) ?? 0) >= 2);
   assert.ok(withLatecomer.every((p) => p.attemptId !== p.reviewerAttemptId));
+  assert.ok(
+    first.every((p) => !withLatecomer.some((n) => n.attemptId === p.attemptId && n.reviewerAttemptId === p.reviewerAttemptId)),
+    "no existing pair is handed out twice"
+  );
+});
+
+test("a late submitter is given marking of their own, not just marks", () => {
+  const first = topUpAllocation(ids(5), [], 2);
+  const withLatecomer = topUpAllocation([...ids(5), "a06"], first, 2);
+  const load = countBy([...first, ...withLatecomer], "reviewerAttemptId");
+  assert.equal(load.get("a06"), 2, "the newcomer reviews as many as everybody else");
+  for (const id of [...ids(5), "a06"]) assert.ok((load.get(id) ?? 0) >= 2, `${id} has reviewing to do`);
+});
+
+test("several latecomers at once all get work and are all reviewed", () => {
+  const first = topUpAllocation(ids(4), [], 2);
+  const later = topUpAllocation([...ids(4), "a05", "a06", "a07"], first, 2);
+  const all = [...first, ...later];
+  const load = countBy(all, "reviewerAttemptId");
+  const received = countBy(all, "attemptId");
+  for (const id of ids(7)) {
+    assert.ok((load.get(id) ?? 0) >= 2, `${id} reviews at least two`);
+    assert.ok((received.get(id) ?? 0) >= 2, `${id} is reviewed at least twice`);
+  }
+  assert.ok(all.every((p) => p.attemptId !== p.reviewerAttemptId));
+  const keys = all.map((p) => `${p.attemptId}|${p.reviewerAttemptId}`);
+  assert.equal(new Set(keys).size, keys.length, "no duplicated pair");
 });
 
 test("running allocation twice with no new students adds nothing", () => {

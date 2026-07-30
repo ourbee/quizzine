@@ -85,6 +85,8 @@ export default function StudentQuizPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [review, setReview] = useState<ReviewPayload | null>(null);
+  const [rechecking, setRechecking] = useState(false);
+  const [recheckedAt, setRecheckedAt] = useState(0);
 
   const submittingRef = useRef(false);
 
@@ -130,6 +132,20 @@ export default function StudentQuizPage() {
       setPhase("intro");
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
+
+  /**
+   * Re-read the quiz so a student sitting on their result page can find out that
+   * peer review has opened without hunting for the link again. The page is a
+   * client component that only loads once, so without this they would have to
+   * know to reload — and a reload lands them right back on the same screen.
+   */
+  const recheckPhase = useCallback(async () => {
+    setRechecking(true);
+    const res = await fetch(`/api/public/${slug}`, { cache: "no-store" });
+    setRechecking(false);
+    setRecheckedAt(Date.now());
+    if (res.ok) setQuiz(await res.json());
   }, [slug]);
 
   // ------- clock tick -------
@@ -308,6 +324,49 @@ export default function StudentQuizPage() {
               Print / save your copy
             </button>
           </div>
+
+          {/*
+            The way back into peer review. A student who has submitted always lands
+            here on every later visit, so this card — not the intro screen — is the
+            only place they can be told that reviewing has opened.
+          */}
+          {quiz.peerReview && (
+            <div className="no-print mt-6 rounded-2xl border-2 p-5" style={{ borderColor: theme.accent, background: theme.accentSoft }}>
+              <h2 className="font-bold">
+                {quiz.phase === "reviewing"
+                  ? "Your turn to mark your classmates"
+                  : quiz.phase === "closed"
+                    ? "Peer review is finished"
+                    : "Peer review has not opened yet"}
+              </h2>
+              <p className="mt-1 text-sm" style={{ color: theme.muted }}>
+                {quiz.phase === "reviewing"
+                  ? "A few classmates' answers are waiting for you. You will not be told whose work it is, and they will never be told who marked theirs."
+                  : quiz.phase === "closed"
+                    ? "Your mark and the comments your classmates left on your work are ready."
+                    : "Your teacher will open the review round shortly. Keep this link — you can check back here at any time."}
+              </p>
+              {quiz.phase === "responding" ? (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={recheckPhase}
+                    disabled={rechecking}
+                    className="rounded-lg px-5 py-2.5 font-semibold disabled:opacity-50"
+                    style={accentBtn}
+                  >
+                    {rechecking ? "Checking…" : "Check if it has opened"}
+                  </button>
+                  {!!recheckedAt && !rechecking && (
+                    <span className="text-sm" style={{ color: theme.muted }}>Not open yet — try again later.</span>
+                  )}
+                </div>
+              ) : (
+                <a href={`/q/${slug}/review`} className="mt-3 inline-block rounded-lg px-6 py-3 font-semibold" style={accentBtn}>
+                  {quiz.phase === "reviewing" ? "Start reviewing →" : "See my mark and comments →"}
+                </a>
+              )}
+            </div>
+          )}
 
           <div className="mt-6 space-y-4">
             {review.questions.map((qn, i) => {
