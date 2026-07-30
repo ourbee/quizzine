@@ -255,7 +255,8 @@ export const SANDBOX_SOURCE = `
     var m;
     while ((m = re.exec(code))) names.push(m[1] || m[2]);
     Object.getOwnPropertyNames(window).forEach(function (n) {
-      if (!before[n] && names.indexOf(n) === -1) names.push(n);
+      // __quizzineBoot is our own scaffolding, not something the script declared.
+      if (!before[n] && n !== "__quizzineBoot" && names.indexOf(n) === -1) names.push(n);
     });
     return names;
   }
@@ -271,6 +272,7 @@ export const SANDBOX_SOURCE = `
       return typeof fn === "function" ? fn : null;
     }
     var failures = [];
+    var attempted = [];
     function call(fn) {
       try { fn(); } catch (e) { failures.push(e && e.message ? e.message : String(e)); }
     }
@@ -281,21 +283,30 @@ export const SANDBOX_SOURCE = `
         if (fn && fn.length === 0) call(fn);
       }
     }
-
-    declaredNames(code, before).forEach(function (name) {
-      if (SKIP_RE.test(name) || forms.length >= MAX_FORMS) return;
+    function tryName(name) {
+      if (forms.length >= MAX_FORMS) return;
       var fn = resolve(name);
       if (!fn || fn.length !== 0) return; // helpers take arguments; entry points do not
+      attempted.push(name);
       call(fn);
       drainTriggers();
+    }
+
+    var names = declaredNames(code, before);
+    var deferred = [];
+    names.forEach(function (name) {
+      // Names like "testForm" or "resetAll" are usually not the builder, and
+      // running them first can undo real work — so they wait their turn.
+      if (SKIP_RE.test(name)) { deferred.push(name); return; }
+      tryName(name);
     });
-    return failures;
+    // Nothing was built: the naming convention was simply unfamiliar, so try the rest.
+    if (!forms.length) deferred.forEach(tryName);
+
+    return { failures: failures, attempted: attempted, declared: names };
   }
 
   function run(code) {
-    var before = {};
-    Object.getOwnPropertyNames(window).forEach(function (n) { before[n] = true; });
-
     // Expose the mock services as globals for the script being run.
     window.FormApp = FormApp; window.ScriptApp = ScriptApp;
     window.PropertiesService = PropertiesService; window.Logger = Logger;
@@ -307,9 +318,14 @@ export const SANDBOX_SOURCE = `
     window.HtmlService = HtmlService; window.CalendarApp = CalendarApp;
     window.console = console_;
 
-    var failures = [];
+    // Snapshot *after* the mocks are installed, so the diff that finds the
+    // script's own top-level names never mistakes a mock service for one.
+    var before = {};
+    Object.getOwnPropertyNames(window).forEach(function (n) { before[n] = true; });
+
+    var report = { failures: [], attempted: [], declared: [] };
     window.__quizzineBoot = function (resolveLocal) {
-      failures = invokeEntryPoints(code, before, resolveLocal);
+      report = invokeEntryPoints(code, before, resolveLocal);
     };
     // The script and the call that drives it share one eval, so every builder it
     // declares — var, function, const or let — is reachable by name.
@@ -320,14 +336,14 @@ export const SANDBOX_SOURCE = `
     } finally {
       delete window.__quizzineBoot;
     }
-    return { forms: forms, failures: failures };
+    return { forms: forms, failures: report.failures, attempted: report.attempted, declared: report.declared };
   }
 
   addEventListener("message", function (ev) {
     if (!ev.data || ev.data.type !== "quizzine-run") return;
     try {
       var out = run(String(ev.data.code));
-      post({ type: "quizzine-result", forms: out.forms, failures: out.failures });
+      post({ type: "quizzine-result", forms: out.forms, failures: out.failures, attempted: out.attempted, declared: out.declared });
     } catch (e) {
       post({ type: "quizzine-error", message: e && e.message ? e.message : String(e) });
     }
@@ -338,6 +354,36 @@ export const SANDBOX_SOURCE = `
 `;
 
 const HARNESS = `<!doctype html><meta charset="utf-8"><script>${SANDBOX_SOURCE}<\/script>`;
+
+/** Signals a script that ran but produced nothing usable, with why. */
+export class AppsScriptEmptyError extends Error {
+  constructor(
+    message: string,
+    readonly detail: { forms: number; attempted: string[]; declared: string[]; failures: string[] }
+  ) {
+    super(message);
+    this.name = "AppsScriptEmptyError";
+  }
+}
+
+/**
+ * Why a script that ran cleanly still gave us nothing. These are the shapes
+ * that genuinely defeat the sandbox, so the message names the fix rather than
+ * leaving a teacher to guess.
+ */
+function explainEmpty(code: string, detail: { attempted: string[]; declared: string[]; failures: string[] }): string {
+  if (detail.failures.length) return ` The script reported: ${detail.failures[0]}`;
+  if (/SpreadsheetApp\s*\.|getSheetByName|getDataRange|openById/.test(code)) {
+    return " It looks as though the questions are read from a Google Sheet, which this app cannot open. Export that sheet as .xlsx and upload it instead — one quiz per sheet.";
+  }
+  if (!detail.attempted.length) {
+    const named = detail.declared.slice(0, 4).join(", ");
+    return detail.declared.length
+      ? ` Every function it defines takes arguments, so none could be run on its own${named ? ` (${named})` : ""}. Add a function that takes no arguments and calls your builder.`
+      : " No function that could be run on its own was found in it.";
+  }
+  return ` Functions were run (${detail.attempted.slice(0, 4).join(", ")}) but none of them called FormApp.create.`;
+}
 
 /** Run an Apps Script file in the sandbox and return every form it builds. */
 export function runAppsScript(code: string, timeoutMs = 15000): Promise<HarvestedForm[]> {
@@ -371,14 +417,28 @@ export function runAppsScript(code: string, timeoutMs = 15000): Promise<Harveste
 
     function onMessage(ev: MessageEvent) {
       if (ev.source !== frame.contentWindow || !ev.data) return;
-      const data = ev.data as { type?: string; forms?: HarvestedForm[]; failures?: string[]; message?: string };
+      const data = ev.data as {
+        type?: string;
+        forms?: HarvestedForm[];
+        failures?: string[];
+        attempted?: string[];
+        declared?: string[];
+        message?: string;
+      };
       if (data.type === "quizzine-ready") {
         frame.contentWindow?.postMessage({ type: "quizzine-run", code }, "*");
       } else if (data.type === "quizzine-result") {
         const forms = data.forms ?? [];
         if (!forms.length) {
-          const why = data.failures?.length ? ` The script reported: ${data.failures[0]}` : "";
-          finish(() => reject(new Error(`No Google Form was built by this script.${why}`)));
+          const detail = {
+            forms: 0,
+            attempted: data.attempted ?? [],
+            declared: data.declared ?? [],
+            failures: data.failures ?? [],
+          };
+          finish(() =>
+            reject(new AppsScriptEmptyError(`No Google Form was built by this script.${explainEmpty(code, detail)}`, detail))
+          );
         } else {
           finish(() => resolve(forms));
         }
@@ -520,9 +580,19 @@ export function formsToQuizzes(forms: HarvestedForm[]): ParsedQuiz[] {
 
 /** Read an Apps Script file into one quiz per Google Form it builds. */
 export async function parseAppsScript(code: string): Promise<ParsedQuiz[]> {
-  const quizzes = formsToQuizzes(await runAppsScript(stripCodeFences(code)));
+  const forms = await runAppsScript(stripCodeFences(code));
+  const quizzes = formsToQuizzes(forms);
   if (!quizzes.length) {
-    throw new Error("The script ran, but no questions were found in the forms it builds.");
+    const titles = forms
+      .map((f) => f.title.trim())
+      .filter(Boolean)
+      .slice(0, 3)
+      .map((t) => `“${t}”`)
+      .join(", ");
+    throw new Error(
+      `${forms.length} Google Form${forms.length === 1 ? " was" : "s were"} built${titles ? ` (${titles})` : ""}, but no questions were found in ${forms.length === 1 ? "it" : "them"}. ` +
+        "If the questions come from a Google Sheet, export that sheet as .xlsx and upload it here instead."
+    );
   }
   return quizzes;
 }
