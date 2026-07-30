@@ -35,7 +35,13 @@ interface Draft {
   questions: Question[];
   errors: string[];
   warnings: string[];
-  include: boolean;
+  /**
+   * The teacher deliberately unticked this one. Kept separate from "has errors"
+   * so that fixing the errors — or switching the quiz to unscored — brings it
+   * back automatically, and so a lone quiz with no checkbox can never get stuck
+   * in an unpublishable state.
+   */
+  excluded: boolean;
   open: boolean;
 }
 
@@ -107,6 +113,11 @@ const TEMPLATE_ROWS = [
  * quiz with missing answers. Typed-answer questions never have a key, so they
  * are not evidence either way — a quiz of essays alone stays scored.
  */
+/** A quiz is published unless the teacher unticked it or it still has errors. */
+function isIncluded(draft: Draft): boolean {
+  return !draft.excluded && draft.errors.length === 0;
+}
+
 function looksLikeSurvey(parsed: ParsedQuiz): boolean {
   const choice = parsed.questions.filter((qn) => qn.options.some((o) => (o.text ?? "").toString().trim() !== ""));
   if (!choice.length) return false;
@@ -145,7 +156,7 @@ export default function NewQuizPage() {
   const [publishError, setPublishError] = useState("");
   const [published, setPublished] = useState<PublishResult[]>([]);
 
-  const selected = useMemo(() => drafts.filter((d) => d.include), [drafts]);
+  const selected = useMemo(() => drafts.filter(isIncluded), [drafts]);
   const ready = selected.length > 0 && selected.every((d) => d.errors.length === 0 && d.title.trim() && d.questions.length > 0);
   const hasMultiQuestions = useMemo(
     () => selected.some((d) => d.questions.some((qn) => qn.type === "multi" && isGraded(qn))),
@@ -184,7 +195,7 @@ export default function NewQuizPage() {
         questions: result.questions,
         errors: result.errors,
         warnings: [...result.warnings, ...(parsed.notes ?? [])],
-        include: result.errors.length === 0,
+        excluded: false,
         open: !many,
       };
     });
@@ -205,7 +216,6 @@ export default function NewQuizPage() {
           questions: result.questions,
           errors: result.errors,
           warnings: [...result.warnings, ...(d.parsed.notes ?? [])],
-          include: result.errors.length === 0 && d.include,
         };
       })
     );
@@ -352,7 +362,8 @@ export default function NewQuizPage() {
     document.getElementById(`draft-${draftId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  const totalErrors = drafts.reduce((n, d) => n + d.errors.length, 0);
+  // Only errors on quizzes the teacher still wants actually block publishing.
+  const blockingErrors = drafts.filter((d) => !d.excluded).reduce((n, d) => n + d.errors.length, 0);
   const reviewActions = (
     <div className="flex flex-wrap items-center gap-3">
       <button onClick={() => setStep("intake")} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">
@@ -365,13 +376,16 @@ export default function NewQuizPage() {
       >
         Continue to settings →
       </button>
-      <p className="text-xs text-slate-500">
+      <p className={`text-xs ${ready ? "text-slate-500" : "text-amber-700"}`}>
         {ready
           ? `${selected.length} quiz${selected.length === 1 ? "" : "zes"} ready · ${selected.reduce((n, d) => n + d.questions.length, 0)} questions`
-          : selected.length === 0
-            ? "Tick at least one quiz to continue."
-            : totalErrors > 0
-              ? `${totalErrors} error${totalErrors === 1 ? "" : "s"} to clear before you can continue.`
+          : blockingErrors > 0
+            ? // Name the real obstacle: there is nothing to tick until these are fixed.
+              `${blockingErrors} error${blockingErrors === 1 ? "" : "s"} to fix below before you can continue.`
+            : selected.length === 0
+              ? drafts.length > 1
+                ? "Tick at least one quiz to continue."
+                : "This quiz cannot be published yet — see the notes below."
               : "Give every selected quiz a title to continue."}
       </p>
     </div>
@@ -507,13 +521,13 @@ export default function NewQuizPage() {
               </p>
               <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
                 <button
-                  onClick={() => setDrafts((list) => list.map((d) => ({ ...d, include: d.errors.length === 0 })))}
+                  onClick={() => setDrafts((list) => list.map((d) => ({ ...d, excluded: false })))}
                   className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100"
                 >
                   Select all
                 </button>
                 <button
-                  onClick={() => setDrafts((list) => list.map((d) => ({ ...d, include: false })))}
+                  onClick={() => setDrafts((list) => list.map((d) => ({ ...d, excluded: true })))}
                   className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100"
                 >
                   Clear selection
@@ -542,7 +556,7 @@ export default function NewQuizPage() {
                       className={`max-w-52 truncate rounded-lg border px-2.5 py-1 text-xs font-medium ${
                         d.errors.length
                           ? "border-red-300 bg-red-50 text-red-700"
-                          : d.include
+                          : isIncluded(d)
                             ? "border-slate-300 text-slate-700 hover:bg-slate-100"
                             : "border-slate-200 text-slate-400 hover:bg-slate-50"
                       }`}
@@ -563,15 +577,15 @@ export default function NewQuizPage() {
               <div
                 key={draft.id}
                 id={`draft-${draft.id}`}
-                className={`scroll-mt-24 rounded-xl border bg-white p-4 ${draft.include ? "border-slate-300" : "border-slate-200 opacity-70"}`}
+                className={`scroll-mt-24 rounded-xl border bg-white p-4 ${isIncluded(draft) ? "border-slate-300" : "border-slate-200 opacity-70"}`}
               >
                 <div className="flex items-start gap-3">
                   {drafts.length > 1 && (
                     <input
                       type="checkbox"
-                      checked={draft.include}
+                      checked={isIncluded(draft)}
                       disabled={draft.errors.length > 0}
-                      onChange={(e) => updateDraft(draft.id, { include: e.target.checked })}
+                      onChange={(e) => updateDraft(draft.id, { excluded: !e.target.checked })}
                       className="mt-2.5 w-4 h-4 shrink-0"
                       aria-label={`Publish quiz ${idx + 1}`}
                     />
