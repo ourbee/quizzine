@@ -6,7 +6,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { getTheme } from "@/lib/themes";
 import { hashSeed, NO_SEMESTER, SEMESTER_CHOICES, seededShuffle, semesterLabel } from "@/lib/normalize";
 import { correctKeysOf, joinKeys, splitKeys } from "@/lib/questions";
@@ -65,6 +65,7 @@ function fmtClock(ms: number): string {
 
 export default function StudentQuizPage() {
   const { slug } = useParams<{ slug: string }>();
+  const router = useRouter();
   const [quiz, setQuiz] = useState<PublicQuiz | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [phase, setPhase] = useState<"loading" | "intro" | "taking" | "review">("loading");
@@ -112,7 +113,14 @@ export default function StudentQuizPage() {
       const savedReview = localStorage.getItem(reviewKey);
       if (savedReview) {
         try {
-          setReview(JSON.parse(savedReview));
+          const parsed = JSON.parse(savedReview);
+          // Their part is done and the marking round is on — reloading this link
+          // should land them in front of their classmates' work, not their own.
+          if (data.peerReview && data.phase === "reviewing") {
+            router.replace(`/q/${slug}/review`);
+            return;
+          }
+          setReview(parsed);
           setPhase("review");
           return;
         } catch {}
@@ -140,13 +148,33 @@ export default function StudentQuizPage() {
    * client component that only loads once, so without this they would have to
    * know to reload — and a reload lands them right back on the same screen.
    */
-  const recheckPhase = useCallback(async () => {
-    setRechecking(true);
-    const res = await fetch(`/api/public/${slug}`, { cache: "no-store" });
-    setRechecking(false);
-    setRecheckedAt(Date.now());
-    if (res.ok) setQuiz(await res.json());
-  }, [slug]);
+  const recheckPhase = useCallback(
+    async (quiet = false) => {
+      if (!quiet) setRechecking(true);
+      const res = await fetch(`/api/public/${slug}`, { cache: "no-store" });
+      if (!quiet) {
+        setRechecking(false);
+        setRecheckedAt(Date.now());
+      }
+      if (!res.ok) return;
+      const data: PublicQuiz = await res.json();
+      // The round is on — straight through, same as a reload would go.
+      if (data.peerReview && data.phase === "reviewing") {
+        router.replace(`/q/${slug}/review`);
+        return;
+      }
+      setQuiz(data);
+    },
+    [slug, router]
+  );
+
+  // A student left waiting on their result page is carried into the review round
+  // the moment the teacher opens it — no reload, no button, nothing to know.
+  useEffect(() => {
+    if (phase !== "review" || !quiz?.peerReview || quiz.phase !== "responding") return;
+    const t = setInterval(() => recheckPhase(true), 15000);
+    return () => clearInterval(t);
+  }, [phase, quiz?.peerReview, quiz?.phase, recheckPhase]);
 
   // ------- clock tick -------
   useEffect(() => {
@@ -303,7 +331,7 @@ export default function StudentQuizPage() {
                 <p className="mt-4 text-3xl font-bold" style={{ color: theme.accent }}>Response recorded</p>
                 <p className="mt-1 text-sm" style={{ color: theme.muted }}>
                   {review.peerReview
-                    ? "Thank you — your classmates will mark this once your teacher opens the review round. Come back to this link then."
+                    ? "Thank you — your classmates will mark this. Reload this page when your teacher opens the peer-review round; if you stay on it, you will be taken through automatically."
                     : "Thank you — this one is not scored, so there is nothing to mark."}
                   {review.flags.late && " Submitted late."}
                 </p>
@@ -344,12 +372,12 @@ export default function StudentQuizPage() {
                   ? "A few classmates' answers are waiting for you. You will not be told whose work it is, and they will never be told who marked theirs."
                   : quiz.phase === "closed"
                     ? "Your mark and the comments your classmates left on your work are ready."
-                    : "Your teacher will open the review round shortly. Keep this link — you can check back here at any time."}
+                    : "Your teacher has not opened the round yet. Stay on this page and you will be taken through the moment it opens — or reload it later."}
               </p>
               {quiz.phase === "responding" ? (
                 <div className="mt-3 flex flex-wrap items-center gap-3">
                   <button
-                    onClick={recheckPhase}
+                    onClick={() => recheckPhase()}
                     disabled={rechecking}
                     className="rounded-lg px-5 py-2.5 font-semibold disabled:opacity-50"
                     style={accentBtn}
@@ -542,7 +570,7 @@ export default function StudentQuizPage() {
               {s.closesAt && <li>• Closes {new Date(s.closesAt).toLocaleString()}</li>}
               <li>
                 {quiz.peerReview
-                  ? "• Come back to this link once your teacher opens the review round"
+                  ? "• When your teacher opens the review round, this same link takes you to your classmates' work"
                   : quiz.survey
                     ? "• You can print or save a copy of your responses after submitting"
                     : "• Your score and feedback appear immediately after you submit"}
