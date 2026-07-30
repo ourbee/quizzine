@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import * as XLSX from "xlsx";
+import { NO_SEMESTER } from "@/lib/normalize";
 import {
   BAND_COLORS,
   DEFAULT_BANDS,
@@ -53,6 +54,16 @@ const BAR: Record<BandColor, string> = {
 };
 
 const SELECTION_KEY = "quizzine.report.quizIds";
+
+/**
+ * Semester labels in a report. 0 is the combined row the report itself adds;
+ * -1 is a student who chose "not applicable" when they submitted.
+ */
+function semLabel(n: number, long = true): string {
+  if (n === 0) return "All semesters";
+  if (n === NO_SEMESTER) return long ? "No semester" : "N/A";
+  return long ? `Semester ${n}` : `Sem ${n}`;
+}
 
 export default function ReportsPage() {
   const router = useRouter();
@@ -250,7 +261,7 @@ export default function ReportsPage() {
       const row: Record<string, unknown> = {
         RollNumber: s.roll,
         Name: s.name,
-        Semester: s.semester,
+        Semester: semLabel(s.semester, false),
       };
       report.quizzes.forEach((z, i) => {
         const r = s.byQuiz[z.id];
@@ -273,7 +284,7 @@ export default function ReportsPage() {
 
     const summaryRows = [...report.semesters, ...(report.overall ? [report.overall] : [])].map((sem) => {
       const row: Record<string, unknown> = {
-        Semester: sem.semester === 0 ? "All semesters" : sem.semester,
+        Semester: semLabel(sem.semester),
         Students: sem.students,
         AveragePercent: sem.average,
         MedianPercent: sem.median,
@@ -292,8 +303,8 @@ export default function ReportsPage() {
         Created: new Date(z.created_at).toLocaleDateString(),
       };
       for (const sem of report.semesters) {
-        row[`Sem ${sem.semester} avg%`] = sem.byQuiz[z.id]?.average ?? "";
-        row[`Sem ${sem.semester} sat`] = sem.byQuiz[z.id]?.sat ?? 0;
+        row[`${semLabel(sem.semester, false)} avg%`] = sem.byQuiz[z.id]?.average ?? "";
+        row[`${semLabel(sem.semester, false)} sat`] = sem.byQuiz[z.id]?.sat ?? 0;
       }
       if (report.overall) {
         row["Overall avg%"] = report.overall.byQuiz[z.id]?.average ?? "";
@@ -304,7 +315,7 @@ export default function ReportsPage() {
 
     const settings = [
       { Setting: "Quizzes in report", Value: report.quizzes.length },
-      { Setting: "Semester filter", Value: semester === "all" ? "All" : `Semester ${semester}` },
+      { Setting: "Semester filter", Value: semester === "all" ? "All" : semLabel(semester) },
       {
         Setting: "Weighting",
         Value: weighting === "equal" ? "Each quiz counts equally" : "Every mark counts equally",
@@ -462,7 +473,7 @@ export default function ReportsPage() {
               <option value="all">All semesters</option>
               {availableSemesters.map((n) => (
                 <option key={n} value={n}>
-                  Semester {n}
+                  {semLabel(n)}
                 </option>
               ))}
             </select>
@@ -617,7 +628,7 @@ export default function ReportsPage() {
               {/* ---------- semester summaries ---------- */}
               <section className="mt-8">
                 <h2 className="font-bold text-slate-900">
-                  {semester === "all" ? "By semester" : `Semester ${semester}`}
+                  {semester === "all" ? "By semester" : semLabel(semester)}
                 </h2>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   {[...report.semesters, ...(report.semesters.length > 1 && report.overall ? [report.overall] : [])].map(
@@ -625,7 +636,7 @@ export default function ReportsPage() {
                       <div key={sem.semester} className="rounded-xl border border-slate-200 bg-white p-4">
                         <div className="flex items-baseline justify-between gap-2">
                           <p className="font-semibold text-slate-900">
-                            {sem.semester === 0 ? "All semesters" : `Semester ${sem.semester}`}
+                            {semLabel(sem.semester)}
                           </p>
                           <p className="text-sm text-slate-500">
                             {sem.students} student{sem.students === 1 ? "" : "s"}
@@ -678,7 +689,7 @@ export default function ReportsPage() {
                         <th className="px-4 py-2.5">Quiz</th>
                         {report.semesters.map((s) => (
                           <th key={s.semester} className="px-4 py-2.5 whitespace-nowrap">
-                            Sem {s.semester}
+                            {semLabel(s.semester, false)}
                           </th>
                         ))}
                         <th className="px-4 py-2.5">All</th>

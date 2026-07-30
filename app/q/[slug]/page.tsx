@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { getTheme } from "@/lib/themes";
-import { hashSeed, seededShuffle } from "@/lib/normalize";
+import { hashSeed, NO_SEMESTER, SEMESTER_CHOICES, seededShuffle, semesterLabel } from "@/lib/normalize";
 import { correctKeysOf, joinKeys, splitKeys } from "@/lib/questions";
 import type { ReviewPayload } from "@/lib/types";
 import Media from "@/components/Media";
@@ -219,8 +219,8 @@ export default function StudentQuizPage() {
     setStarting(true);
     setStartError("");
     const payload = quiz.settings.groupMode
-      ? { slug, group: { name: groupName, semester: Number(semester), members } }
-      : { slug, name, roll, semester: Number(semester) };
+      ? { slug, group: { name: groupName, semester, members } }
+      : { slug, name, roll, semester };
     const res = await fetch("/api/attempts/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -274,13 +274,13 @@ export default function StudentQuizPage() {
             <p className="text-sm font-medium" style={{ color: theme.muted }}>{review.quizTitle}</p>
             {review.group ? (
               <>
-                <h1 className="mt-1 text-xl font-bold">{review.group.name} · Sem {review.group.semester}</h1>
+                <h1 className="mt-1 text-xl font-bold">{review.group.name} · {semesterLabel(review.group.semester)}</h1>
                 <p className="mt-1 text-sm" style={{ color: theme.muted }}>
                   {review.group.members.map((m) => `${m.name} (${m.roll})`).join(" · ")}
                 </p>
               </>
             ) : (
-              <h1 className="mt-1 text-xl font-bold">{review.student.name} · {review.student.rollNorm} · Sem {review.student.semester}</h1>
+              <h1 className="mt-1 text-xl font-bold">{review.student.name} · {review.student.rollNorm} · {semesterLabel(review.student.semester)}</h1>
             )}
             {review.survey ? (
               <>
@@ -556,9 +556,10 @@ export default function StudentQuizPage() {
                           style={{ borderColor: theme.border }}
                         >
                           <option value="">Semester</option>
-                          {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                          {SEMESTER_CHOICES.map((n) => (
                             <option key={n} value={n}>Sem {n}</option>
                           ))}
+                          <option value={NO_SEMESTER}>Not applicable</option>
                         </select>
                       </label>
                     </div>
@@ -622,9 +623,10 @@ export default function StudentQuizPage() {
                         style={{ borderColor: theme.border }}
                       >
                         <option value="">Semester</option>
-                        {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                        {SEMESTER_CHOICES.map((n) => (
                           <option key={n} value={n}>Sem {n}</option>
                         ))}
+                        <option value={NO_SEMESTER}>Not applicable</option>
                       </select>
                     </div>
                   </>

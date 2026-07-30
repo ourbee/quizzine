@@ -410,8 +410,10 @@ export default function NewQuizPage() {
           <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
             <p className="text-sm text-blue-900 font-medium">Workflow</p>
             <p className="text-sm text-blue-800 mt-1">
-              1. Copy the AI prompt below into ChatGPT, Claude or Gemini (attach your source material if any). 2. Edit
-              the questions on device if needed, then upload or paste the file it returns. 3. Review everything in the
+              1. Copy the AI prompt below into ChatGPT, Claude or Gemini (attach your source material if any) and add
+              your brief. 2. It will come back with a short numbered list of anything you left open — question types,
+              level, whether it is marked at all — so answer those and it will then build the file. 3. Edit the
+              questions on device if needed, then upload or paste the file it returns. 4. Review everything in the
               preview here — ask the AI for a corrected file if something is off.
             </p>
             <p className="text-sm text-blue-800 mt-2">
@@ -443,7 +445,8 @@ export default function NewQuizPage() {
               </ul>
               <p className="mt-2 text-xs text-blue-800">
                 A whole quiz can be marked as having no correct answers on the next screen — useful for surveys, opinion
-                polls and work you intend to have peer-reviewed.
+                polls and work you intend to have peer-reviewed. You get an Excel file by default; say so in your brief
+                if you would rather have JSON, plain text or an Apps Script.
               </p>
             </details>
           </div>

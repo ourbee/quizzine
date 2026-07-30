@@ -11,6 +11,7 @@ import Link from "next/link";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import { correctKeysOf, isChoice, isGraded, isSurvey, splitKeys } from "@/lib/questions";
+import { semesterLabel } from "@/lib/normalize";
 import PeerReviewPanel from "@/components/PeerReviewPanel";
 import type { AttemptFlags, GroupInfo, PerQuestionResult, Question, QuizSettings, StudentInfo } from "@/lib/types";
 
@@ -153,12 +154,12 @@ export default function QuizDetailPage() {
             GroupName: a.group_info.name,
             Members: a.group_info.members.map((m) => `${m.name} (${m.roll})`).join(", "),
             MemberCount: a.group_info.members.length,
-            Semester: a.group_info.semester,
+            Semester: semesterLabel(a.group_info.semester),
           }
         : {
             Name: a.student.name,
             RollNumber: a.student.rollNorm,
-            Semester: a.student.semester,
+            Semester: semesterLabel(a.student.semester),
           };
       Object.assign(row, {
         Score: a.score ?? 0,
@@ -301,7 +302,7 @@ export default function QuizDetailPage() {
                     >
                       <td className="px-4 py-2.5 font-medium text-slate-900">{a.group_info ? a.group_info.name : a.student.name}</td>
                       <td className="px-4 py-2.5">{a.group_info ? `${a.group_info.members.length} members` : a.student.rollNorm}</td>
-                      <td className="px-4 py-2.5">{a.group_info ? a.group_info.semester : a.student.semester}</td>
+                      <td className="px-4 py-2.5">{semesterLabel(a.group_info ? a.group_info.semester : a.student.semester)}</td>
                       <td className="px-4 py-2.5 font-semibold">
                         {survey
                           ? `${a.per_question?.filter((p) => p.answer).length ?? 0} / ${quiz.questions.length}`

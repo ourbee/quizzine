@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
-import { genId, normName, normRoll } from "@/lib/normalize";
+import { genId, normName, normRoll, readSemester } from "@/lib/normalize";
 import type { GroupInfo, Question, QuizSettings, StudentInfo } from "@/lib/types";
 
 export async function POST(req: NextRequest) {
@@ -29,9 +29,9 @@ export async function POST(req: NextRequest) {
   if (settings.groupMode) {
     const g = body.group;
     const groupName = typeof g?.name === "string" ? g.name.trim() : "";
-    const semester = Number(g?.semester);
+    const semester = readSemester(g?.semester);
     const rawMembers: unknown[] = Array.isArray(g?.members) ? g.members : [];
-    if (!groupName || !(semester >= 1 && semester <= 8) || rawMembers.length === 0) {
+    if (!groupName || semester === null || rawMembers.length === 0) {
       return NextResponse.json({ error: "Please fill in your group name, semester and every member's details." }, { status: 400 });
     }
     const lo = settings.groupMin ?? 1;
@@ -85,8 +85,8 @@ export async function POST(req: NextRequest) {
   } else {
     const name = typeof body?.name === "string" ? body.name.trim() : "";
     const roll = typeof body?.roll === "string" ? body.roll.trim() : "";
-    const semester = Number(body?.semester);
-    if (!name || !roll || !(semester >= 1 && semester <= 8)) {
+    const semester = readSemester(body?.semester);
+    if (!name || !roll || semester === null) {
       return NextResponse.json({ error: "Please fill in your name, roll number and semester." }, { status: 400 });
     }
     if (!/^\d{1,15}$/.test(roll)) {

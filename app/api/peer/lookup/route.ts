@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
-import { normRoll } from "@/lib/normalize";
+import { normRoll, readSemester } from "@/lib/normalize";
 import { normalizePeerConfig, reviewableQuestions } from "@/lib/peer";
 import { listReviews, summarisePeer, listSubmittedAttempts, type PeerReviewRow } from "@/lib/peerdb";
 import type { GroupInfo, Question, QuizSettings, StudentInfo } from "@/lib/types";
@@ -24,8 +24,8 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   const slug = typeof body?.slug === "string" ? body.slug : "";
   const roll = normRoll(String(body?.roll ?? ""));
-  const semester = Number(body?.semester);
-  if (!slug || !roll || !Number.isFinite(semester)) {
+  const semester = readSemester(body?.semester);
+  if (!slug || !roll || semester === null) {
     return NextResponse.json({ error: "Enter your roll number and semester." }, { status: 400 });
   }
 

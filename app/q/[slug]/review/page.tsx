@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { getTheme } from "@/lib/themes";
+import { NO_SEMESTER, SEMESTER_CHOICES } from "@/lib/normalize";
 import type { PeerCriterion } from "@/lib/peer";
 
 interface Task {
@@ -91,7 +92,7 @@ export default function PeerReviewPage() {
     const res = await fetch("/api/peer/lookup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slug, roll, semester: Number(semester) }),
+      body: JSON.stringify({ slug, roll, semester }),
     });
     setBusy(false);
     const data = await res.json().catch(() => ({}));
@@ -160,9 +161,10 @@ export default function PeerReviewPage() {
                 style={{ borderColor: theme.border }}
               >
                 <option value="">Semester</option>
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                {SEMESTER_CHOICES.map((n) => (
                   <option key={n} value={n}>Sem {n}</option>
                 ))}
+                <option value={NO_SEMESTER}>Not applicable</option>
               </select>
               {error && <p className="text-sm text-red-600">{error}</p>}
               <button type="submit" disabled={busy} className="w-full rounded-lg py-3 font-semibold disabled:opacity-50" style={accentBtn}>

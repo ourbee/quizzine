@@ -7,6 +7,31 @@ export function normRoll(roll: string): string {
   return roll.trim().replace(/\s+/g, " ").toUpperCase();
 }
 
+/**
+ * Semesters a student can pick. -1 is "not applicable" — for open quizzes,
+ * staff, visitors or mixed groups. It cannot be 0, because the reports already
+ * use semester 0 for their "all semesters" summary row.
+ */
+export const NO_SEMESTER = -1;
+export const SEMESTER_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8];
+
+export function semesterLabel(n: number): string {
+  return n === NO_SEMESTER ? "N/A" : `Sem ${n}`;
+}
+
+/**
+ * Read a semester off a request. Returns null for anything that is not a
+ * deliberate choice, so an empty field can never be silently taken as "not
+ * applicable" — `Number("")` is 0, which is exactly the trap to avoid.
+ */
+export function readSemester(raw: unknown): number | null {
+  if (raw === "" || raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n)) return null;
+  if (n === NO_SEMESTER) return NO_SEMESTER;
+  return n >= 1 && n <= 8 ? n : null;
+}
+
 export function normName(name: string): string {
   return name
     .trim()

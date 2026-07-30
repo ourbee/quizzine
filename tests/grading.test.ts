@@ -182,3 +182,31 @@ test("a Graded: no line in the block format marks the question unscored", () => 
   assert.deepEqual(errors, []);
   assert.equal(questions[0].graded, false);
 });
+
+// ---------------- semester, including "not applicable" ----------------
+
+test("a blank semester is rejected rather than being read as 'not applicable'", async () => {
+  const { readSemester } = await import("../lib/normalize.ts");
+  // Number("") is 0, which is exactly the coercion this must not fall for.
+  assert.equal(readSemester(""), null);
+  assert.equal(readSemester(undefined), null);
+  assert.equal(readSemester(null), null);
+  assert.equal(readSemester("abc"), null);
+});
+
+test("'not applicable' is accepted and never collides with a real semester", async () => {
+  const { readSemester, NO_SEMESTER, semesterLabel } = await import("../lib/normalize.ts");
+  assert.equal(readSemester(NO_SEMESTER), NO_SEMESTER);
+  assert.equal(readSemester("-1"), -1);
+  assert.equal(semesterLabel(NO_SEMESTER), "N/A");
+  assert.equal(semesterLabel(3), "Sem 3");
+  // 0 is reserved for the reports' "all semesters" row, so it must not be pickable.
+  assert.notEqual(NO_SEMESTER, 0);
+  assert.equal(readSemester(0), null);
+});
+
+test("only semesters 1 to 8 are accepted alongside the sentinel", async () => {
+  const { readSemester } = await import("../lib/normalize.ts");
+  for (const n of [1, 4, 8]) assert.equal(readSemester(String(n)), n);
+  for (const n of [9, 100, -2, 2.5]) assert.equal(readSemester(n), null, `${n} must be rejected`);
+});

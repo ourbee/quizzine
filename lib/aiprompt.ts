@@ -3,17 +3,49 @@
  * https://github.com/ourbee
  */
 
-export const AI_PROMPT = `You are helping me, a teacher, build a quiz file for the Quizzine app. Produce the COMPLETE quiz in ONE reply, in the output format I pick below. Do not ask clarifying questions first — make sensible choices from my brief. I will review the file myself; if I ask for changes, return the corrected COMPLETE file again in the same format.
+export const AI_PROMPT = `You are helping me, a teacher, build a quiz file for the Quizzine app. This happens in TWO steps. Do not skip step 1.
 
-MY BRIEF (I will fill these in):
+STEP 1 — READ MY BRIEF, THEN ASK ME ABOUT ANYTHING UNCLEAR.
+Before you write a single question, check my brief against the CHECKLIST below. If anything needed to build the quiz properly is missing, vague or ambiguous, ASK ME — do not guess and do not quietly pick something.
+
+How to ask:
+- Put every question you have in ONE numbered list, in one reply. Never dribble them out one at a time.
+- Offer a suggested answer for each, so I can reply just "1b, 2 yes, 3 mix".
+- Then STOP and wait. Do not write any questions, a sample, a preview, or a partial file while you are waiting.
+- Ask only about things I have genuinely left open. Never re-ask something I have already told you, and never ask about anything under DEFAULTS below.
+- If nothing is unclear, say so in one line and go straight to step 2.
+
+CHECKLIST — ask whenever I have not made these clear:
+1. Topic or source. What exactly is the quiz on? If I attached material, is it the only source, or may you use general knowledge too? If I named a broad subject, which sub-topics should it cover?
+2. Number of questions. Ask if I have not given a number.
+3. Question types. mcq only? A mix? Any typed answers? This is the one teachers most often forget — ask unless I have said.
+4. Whether answers are marked at all. Is this a scored quiz, an unscored survey or opinion poll, or work I intend to have peer reviewed? Ask if my brief could mean either.
+5. Student level. Which class, year or semester, and roughly what difficulty?
+6. Coverage and balance, when it matters. How to split the questions across topics, or how many of each type.
+7. Anything else genuinely ambiguous in what I wrote — an unclear instruction, a contradiction, a term that could mean two things.
+
+If I say "you decide", "use your judgement", "no questions", or "just produce it", skip the questions entirely and go to step 2 using sensible choices and the defaults.
+
+STEP 2 — PRODUCE THE COMPLETE FILE.
+Once I have answered, produce the COMPLETE quiz in ONE reply, in the output format below. I will review it myself; if I ask for changes, return the corrected COMPLETE file again in the same format — never a fragment.
+
+DEFAULTS — apply these silently, never ask about them:
+- Output format: FORMAT A, an Excel/CSV table. Only use another format if I explicitly name one.
+- Points per question: 1
+- Options per choice question: four
+- Number of quizzes: 1
+- Language: British English
+
+MY BRIEF (anything I leave blank or vague is something to ask about in step 1):
 - Topic / syllabus area: [TOPIC — or write "use the attached file/text as the only source" and attach your material]
 - Number of questions: [N]
 - Student level: [e.g. Semester 3 undergraduate]
-- Language/style: [e.g. British English]
 - Question types to use: [mcq only / mix of mcq, multi, short, essay / poll and open only, for a survey]
-- Points per question: [default 1]
-- Output format: [A = Excel/CSV table, B = JSON, C = plain-text blocks, D = Google Apps Script quiz builder]
-- Number of quizzes: [1 — or e.g. "5 quizzes, one per theme". For several quizzes use format A with one SHEET per quiz (sheet name = quiz title), or format D with one Google Form per quiz.]
+- Scored, survey or peer reviewed: [scored unless I say otherwise]
+- Points per question: [leave blank for 1]
+- Language/style: [leave blank for British English]
+- Output format: [leave blank for Excel/CSV. Otherwise: B = JSON, C = plain-text blocks, D = Google Apps Script quiz builder]
+- Number of quizzes: [leave blank for 1 — or e.g. "5 quizzes, one per theme". For several quizzes use format A with one SHEET per quiz (sheet name = quiz title), or format D with one Google Form per quiz.]
 
 QUESTION TYPES:
 - "mcq" — one correct answer, auto-graded.
@@ -36,9 +68,9 @@ QUALITY RULES (mandatory):
 
 OUTPUT FORMATS:
 
-FORMAT A — Excel/CSV (default): a table with EXACTLY these columns, one row per question:
+FORMAT A — Excel/CSV. THIS IS THE DEFAULT: use it unless I have explicitly named another format. A table with EXACTLY these columns, one row per question:
 Question | Type | OptionA | OptionB | OptionC | OptionD | CorrectAnswer | FeedbackA | FeedbackB | FeedbackC | FeedbackD | Points | MediaURL | Passage
-(If you can generate a downloadable .xlsx, do that; otherwise give me a CSV code block I can paste into a spreadsheet. CorrectAnswer holds letters only — one letter for "mcq", several comma-separated for "multi", empty for "poll", "open", "short" and "essay". For several quizzes, put each quiz on its own sheet and name the sheet after the quiz — the app builds one quiz per sheet.)
+(Give me a downloadable .xlsx file if you can produce one — that is what I want by default. If you cannot, give me a CSV code block I can paste into a spreadsheet instead. CorrectAnswer holds letters only — one letter for "mcq", several comma-separated for "multi", empty for "poll", "open", "short" and "essay". For several quizzes, put each quiz on its own sheet and name the sheet after the quiz — the app builds one quiz per sheet.)
 
 FORMAT B — JSON: a single code block:
 {
