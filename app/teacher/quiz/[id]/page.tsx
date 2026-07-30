@@ -11,6 +11,7 @@ import Link from "next/link";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import { correctKeysOf, isChoice, isGraded, isSurvey, splitKeys } from "@/lib/questions";
+import PeerReviewPanel from "@/components/PeerReviewPanel";
 import type { AttemptFlags, GroupInfo, PerQuestionResult, Question, QuizSettings, StudentInfo } from "@/lib/types";
 
 interface QuizRow {
@@ -23,6 +24,7 @@ interface QuizRow {
   theme: string;
   accepting: boolean;
   created_at: string;
+  phase?: string | null;
 }
 
 interface AttemptRow {
@@ -114,8 +116,13 @@ export default function QuizDetailPage() {
     });
   }, [quiz, attempts]);
 
-  // A quiz with nothing to score has no meaningful average.
-  const survey = quiz ? quiz.settings.gradingMode === "survey" || isSurvey(quiz.questions) : false;
+  // A quiz with nothing to score has no meaningful average. A peer-reviewed one
+  // has no marks either until the reviews are in and the teacher releases them.
+  const peerMode = quiz?.settings.gradingMode === "peer";
+  const survey = quiz
+    ? quiz.settings.gradingMode === "survey" ||
+      (peerMode ? (quiz.phase ?? "responding") !== "closed" : isSurvey(quiz.questions))
+    : false;
   const avg = attempts.length
     ? attempts.reduce((s, a) => s + (a.score ?? 0), 0) / attempts.length
     : 0;
@@ -352,6 +359,8 @@ export default function QuizDetailPage() {
           );
         })()}
       </section>
+
+      {quiz.settings.gradingMode === "peer" && <PeerReviewPanel quizId={quiz.id} onPhaseChange={load} />}
 
       <section className="mt-10">
         <h2 className="font-bold text-slate-900">Item analysis</h2>

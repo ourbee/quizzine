@@ -8,6 +8,7 @@ import { q } from "@/lib/db";
 import { currentTeacher } from "@/lib/auth";
 import { genId, slugify } from "@/lib/normalize";
 import { correctKeysOf, isGraded } from "@/lib/questions";
+import { normalizePeerConfig } from "@/lib/peer";
 import type { Question, QuizSettings } from "@/lib/types";
 
 export async function GET() {
@@ -61,8 +62,9 @@ export async function POST(req: NextRequest) {
   const settings: QuizSettings = {
     shuffleQuestions: !!body.settings?.shuffleQuestions,
     shuffleOptions: !!body.settings?.shuffleOptions,
-    gradingMode: body.settings?.gradingMode === "survey" ? "survey" : "graded",
+    gradingMode: ["survey", "peer"].includes(body.settings?.gradingMode) ? body.settings.gradingMode : "graded",
     multiScoring: body.settings?.multiScoring === "partial" ? "partial" : "exact",
+    peer: body.settings?.gradingMode === "peer" ? normalizePeerConfig(body.settings?.peer) : undefined,
     timerMode: ["none", "quiz", "question"].includes(body.settings?.timerMode) ? body.settings.timerMode : "none",
     maxMinutes: Number(body.settings?.maxMinutes) > 0 ? Number(body.settings.maxMinutes) : undefined,
     perQuestionSeconds: Number(body.settings?.perQuestionSeconds) > 0 ? Number(body.settings.perQuestionSeconds) : undefined,

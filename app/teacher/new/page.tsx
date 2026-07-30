@@ -13,6 +13,7 @@ import { parseJsonText, parsePastedText, parseWorkbookSheets } from "@/lib/parse
 import { looksLikeAppsScript, parseAppsScript } from "@/lib/appsscript";
 import { validateQuestions } from "@/lib/validate";
 import { correctKeysOf, isGraded } from "@/lib/questions";
+import { DEFAULT_PEER_CONFIG, peerMaxScore, type PeerConfig } from "@/lib/peer";
 import { AI_PROMPT } from "@/lib/aiprompt";
 import { THEMES } from "@/lib/themes";
 import type { GradingMode, MultiScoring, ParsedQuiz, Question, TimerMode } from "@/lib/types";
@@ -134,6 +135,7 @@ export default function NewQuizPage() {
   const [closesAt, setClosesAt] = useState("");
   const [allowMultiple, setAllowMultiple] = useState(false);
   const [multiScoring, setMultiScoring] = useState<MultiScoring>("exact");
+  const [peer, setPeer] = useState<PeerConfig>(DEFAULT_PEER_CONFIG);
   const [introMedia, setIntroMedia] = useState("");
   const [groupMode, setGroupMode] = useState(false);
   const [groupMin, setGroupMin] = useState("2");
@@ -149,6 +151,14 @@ export default function NewQuizPage() {
     () => selected.some((d) => d.questions.some((qn) => qn.type === "multi" && isGraded(qn))),
     [selected]
   );
+  const anyPeer = useMemo(() => selected.some((d) => d.gradingMode === "peer"), [selected]);
+  // Peers mark typed answers only; the count drives the rubric total shown to the teacher.
+  const peerQuestionCount = useMemo(() => {
+    const counts = selected
+      .filter((d) => d.gradingMode === "peer")
+      .map((d) => d.questions.filter((qn) => qn.type === "short" || qn.type === "essay").length);
+    return counts.length ? Math.max(...counts) : 0;
+  }, [selected]);
 
   function updateDraft(id: string, patch: Partial<Draft>) {
     setDrafts((list) => list.map((d) => (d.id === id ? { ...d, ...patch } : d)));
@@ -285,6 +295,7 @@ export default function NewQuizPage() {
       shuffleQuestions,
       shuffleOptions,
       multiScoring,
+      peer,
       timerMode,
       maxMinutes: timerMode === "quiz" ? Number(maxMinutes) : undefined,
       perQuestionSeconds: timerMode === "question" ? Number(perQuestionSeconds) : undefined,
@@ -584,7 +595,7 @@ export default function NewQuizPage() {
                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="text-sm font-semibold text-slate-800">Marking</p>
-                        {([["graded", "Scored quiz"], ["survey", "No correct answers"]] as [GradingMode, string][]).map(([mode, label]) => (
+                        {([["graded", "Scored quiz"], ["survey", "No correct answers"], ["peer", "Peer reviewed"]] as [GradingMode, string][]).map(([mode, label]) => (
                           <button
                             key={mode}
                             onClick={() => setGradingMode(draft.id, mode)}
@@ -597,10 +608,18 @@ export default function NewQuizPage() {
                         ))}
                       </div>
                       <p className="mt-2 text-xs text-slate-600">
-                        {survey
-                          ? "Answers are collected but never marked. Students see a confirmation instead of a score, and you get the response spread for every question."
-                          : "Questions with an answer key are marked automatically; typed answers wait for you. Individual questions can still be left unscored with Type “poll” or “open”."}
+                        {draft.gradingMode === "peer"
+                          ? "Students answer first with nothing marked. When you open peer review, each response is given to several classmates to mark against your rubric — anonymously, both ways. You set the rubric on the next screen."
+                          : survey
+                            ? "Answers are collected but never marked. Students see a confirmation instead of a score, and you get the response spread for every question."
+                            : "Questions with an answer key are marked automatically; typed answers wait for you. Individual questions can still be left unscored with Type “poll” or “open”."}
                       </p>
+                      {draft.gradingMode === "peer" && !draft.questions.some((qn) => qn.type === "short" || qn.type === "essay") && (
+                        <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                          Peers mark typed answers, and this quiz has none. Add at least one short or essay question,
+                          or there will be nothing for them to review.
+                        </p>
+                      )}
                       {draft.autoSurvey && (
                         <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
                           No correct answers were found in this file, so it has been set up as a survey. If the answer key
@@ -790,6 +809,130 @@ export default function NewQuizPage() {
               Allow multiple attempts per roll number
             </label>
           </div>
+
+          {anyPeer && (
+            <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-semibold text-slate-900">Peer review rubric</p>
+              <p className="text-xs text-slate-500">
+                Classmates score every typed answer against these criteria and leave a comment. A response is worth{" "}
+                <span className="font-semibold text-slate-700">{peerMaxScore(peer.criteria, peerQuestionCount)} marks</span>{" "}
+                ({peerQuestionCount} reviewed question{peerQuestionCount === 1 ? "" : "s"}).
+              </p>
+              <div className="space-y-2">
+                {peer.criteria.map((c, i) => (
+                  <div key={c.id} className="flex flex-wrap items-center gap-2">
+                    <input
+                      value={c.label}
+                      onChange={(e) =>
+                        setPeer((p) => ({
+                          ...p,
+                          criteria: p.criteria.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)),
+                        }))
+                      }
+                      placeholder="Criterion, e.g. Evidence"
+                      className="min-w-48 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    />
+                    <label className="text-xs text-slate-500">
+                      out of
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={c.max}
+                        onChange={(e) =>
+                          setPeer((p) => ({
+                            ...p,
+                            criteria: p.criteria.map((x, j) => (j === i ? { ...x, max: Number(e.target.value) || 1 } : x)),
+                          }))
+                        }
+                        className="ml-2 w-20 rounded-lg border border-slate-300 px-2 py-2 text-sm text-slate-900"
+                      />
+                    </label>
+                    <button
+                      onClick={() => setPeer((p) => ({ ...p, criteria: p.criteria.filter((_, j) => j !== i) }))}
+                      disabled={peer.criteria.length < 2}
+                      className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                      aria-label={`Remove ${c.label}`}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() =>
+                    setPeer((p) => ({ ...p, criteria: [...p.criteria, { id: `c${Date.now()}`, label: "", max: 5 }] }))
+                  }
+                  disabled={peer.criteria.length >= 10}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                >
+                  Add criterion
+                </button>
+              </div>
+
+              <div className="grid gap-3 border-t border-slate-100 pt-3 sm:grid-cols-2">
+                <label className="text-sm text-slate-700">
+                  Reviewers per response
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={peer.reviewsPerResponse}
+                    onChange={(e) => setPeer((p) => ({ ...p, reviewsPerResponse: Number(e.target.value) || 1 }))}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="text-sm text-slate-700">
+                  Marks for completing your own reviews
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={peer.reviewPoints}
+                    onChange={(e) => setPeer((p) => ({ ...p, reviewPoints: Number(e.target.value) || 0 }))}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2 text-sm">
+                {([["mean", "Average of reviewers"], ["median", "Median of reviewers"]] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    onClick={() => setPeer((p) => ({ ...p, aggregate: mode }))}
+                    className={`rounded-lg px-4 py-2 font-medium ${peer.aggregate === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500">
+                {peer.aggregate === "mean"
+                  ? "Every reviewer counts equally towards the mark."
+                  : "The middle mark is taken, so one unusually harsh or generous reviewer cannot swing the result."}
+              </p>
+              <label className="flex items-center gap-2.5 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={peer.commentRequired}
+                  onChange={(e) => setPeer((p) => ({ ...p, commentRequired: e.target.checked }))}
+                  className="h-4 w-4"
+                />
+                A written comment is required on every part
+              </label>
+              <label className="flex items-center gap-2.5 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={peer.releaseFeedback}
+                  onChange={(e) => setPeer((p) => ({ ...p, releaseFeedback: e.target.checked }))}
+                  className="h-4 w-4"
+                />
+                Students may read their peers&apos; comments once you release the results
+              </label>
+              <p className="rounded-lg border border-blue-200 bg-blue-50 p-2.5 text-xs text-blue-900">
+                Publishing opens the responding phase. When everyone has answered, come back to the quiz page and click
+                “Open peer review” — that is what hands the work out.
+              </p>
+            </div>
+          )}
 
           {hasMultiQuestions && (
             <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">

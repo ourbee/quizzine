@@ -21,11 +21,16 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
     settings: QuizSettings;
     theme: string;
     accepting: boolean;
+    phase: string | null;
   }>(`SELECT * FROM quizzes WHERE slug = $1`, [slug]);
   if (!rows.length) return NextResponse.json({ error: "Quiz not found" }, { status: 404 });
   const quiz = rows[0];
   const settings = quiz.settings;
-  const closed = !quiz.accepting || (settings.closesAt ? Date.now() > new Date(settings.closesAt).getTime() : false);
+  const phase = quiz.phase ?? "responding";
+  const closed =
+    phase !== "responding" ||
+    !quiz.accepting ||
+    (settings.closesAt ? Date.now() > new Date(settings.closesAt).getTime() : false);
 
   const questions = quiz.questions as Question[];
   // Whether a question is scored is safe to reveal; which option is right is not.
@@ -61,6 +66,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
     questionCount: questions.length,
     totalPoints: maxPoints(questions),
     survey: settings.gradingMode === "survey" || isSurvey(questions),
+    peerReview: settings.gradingMode === "peer",
+    phase,
     closed,
     questions: closed ? [] : sanitized,
   });

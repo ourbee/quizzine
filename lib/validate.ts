@@ -91,7 +91,9 @@ export function validateQuestions(parsed: ParsedQuiz, gradingMode: GradingMode =
   const errors: string[] = [];
   const warnings: string[] = [];
   const questions: Question[] = [];
-  const surveyQuiz = gradingMode === "survey";
+  // Survey and peer-reviewed quizzes both leave every question unmarked at
+  // submission; peers supply the marks for the latter, later.
+  const surveyQuiz = gradingMode !== "graded";
 
   if (!parsed.questions.length) {
     return { errors: ["No questions found. Check that the file follows the template."], warnings, questions };

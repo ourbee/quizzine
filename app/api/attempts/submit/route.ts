@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
   const quiz = quizzes[0];
   const questions = quiz.questions as Question[];
   const survey = quiz.settings?.gradingMode === "survey" || isSurvey(questions);
+  const peerReview = quiz.settings?.gradingMode === "peer";
 
   // Idempotent: a second submit (double-click, refresh) returns the stored result.
   if (attempt.status === "submitted" && attempt.per_question) {
@@ -54,6 +55,7 @@ export async function POST(req: NextRequest) {
       max: attempt.max_score ?? 0,
       pending,
       survey,
+      peerReview,
       flags: attempt.flags ?? {},
       submittedAt: attempt.submitted_at ?? new Date().toISOString(),
     };
@@ -93,6 +95,7 @@ export async function POST(req: NextRequest) {
     max,
     pending,
     survey,
+    peerReview,
     flags,
     submittedAt,
   };

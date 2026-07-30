@@ -3,6 +3,8 @@
  * https://github.com/ourbee
  */
 
+import type { PeerConfig } from "./peer";
+
 /** The input control a question uses. Whether it is scored is a separate matter — see `graded`. */
 export type QType = "mcq" | "multi" | "short" | "essay";
 
@@ -34,8 +36,11 @@ export interface Question {
 
 export type TimerMode = "none" | "quiz" | "question";
 
-/** Whole-quiz stance on scoring. "survey" forces every question ungraded. */
-export type GradingMode = "graded" | "survey";
+/**
+ * Whole-quiz stance on scoring. "survey" and "peer" both leave every question
+ * unmarked at submission; a peer-reviewed quiz is scored later by classmates.
+ */
+export type GradingMode = "graded" | "survey" | "peer";
 
 /** How a multi-answer question is marked when the student's set is not exact. */
 export type MultiScoring = "exact" | "partial";
@@ -53,6 +58,7 @@ export interface QuizSettings {
   groupMode?: boolean; // one submission per group instead of per student
   groupMin?: number; // members per group, inclusive bounds
   groupMax?: number;
+  peer?: PeerConfig; // present when gradingMode is "peer"
 }
 
 export interface Quiz {
@@ -114,6 +120,8 @@ export interface ReviewPayload {
   pending: number;
   /** Nothing in this quiz is scored — show a confirmation, not a mark. */
   survey: boolean;
+  /** Unmarked for now because classmates will mark it later. */
+  peerReview?: boolean;
   flags: AttemptFlags;
   submittedAt: string;
 }

@@ -45,6 +45,8 @@ interface PublicQuiz {
   questionCount: number;
   totalPoints: number;
   survey: boolean;
+  peerReview: boolean;
+  phase: "responding" | "reviewing" | "closed";
   closed: boolean;
   questions: PublicQuestion[];
 }
@@ -284,7 +286,9 @@ export default function StudentQuizPage() {
               <>
                 <p className="mt-4 text-3xl font-bold" style={{ color: theme.accent }}>Response recorded</p>
                 <p className="mt-1 text-sm" style={{ color: theme.muted }}>
-                  Thank you — this one is not scored, so there is nothing to mark.
+                  {review.peerReview
+                    ? "Thank you — your classmates will mark this once your teacher opens the review round. Come back to this link then."
+                    : "Thank you — this one is not scored, so there is nothing to mark."}
                   {review.flags.late && " Submitted late."}
                 </p>
               </>
@@ -459,9 +463,13 @@ export default function StudentQuizPage() {
             <ul className="mt-4 text-sm space-y-1" style={{ color: theme.muted }}>
               <li>
                 • {quiz.questionCount} questions
-                {quiz.survey ? " · not scored" : ` · ${quiz.totalPoints} points`}
+                {quiz.peerReview ? " · marked by your classmates" : quiz.survey ? " · not scored" : ` · ${quiz.totalPoints} points`}
               </li>
-              {quiz.survey && <li>• There are no right or wrong answers here — your responses are simply recorded.</li>}
+              {quiz.peerReview ? (
+                <li>• Nothing is marked as you answer — classmates review your work afterwards, anonymously both ways.</li>
+              ) : (
+                quiz.survey && <li>• There are no right or wrong answers here — your responses are simply recorded.</li>
+              )}
               {s.groupMode && (
                 <li>
                   • Group quiz — one submission per group of{" "}
@@ -474,13 +482,33 @@ export default function StudentQuizPage() {
               )}
               {s.closesAt && <li>• Closes {new Date(s.closesAt).toLocaleString()}</li>}
               <li>
-                {quiz.survey
-                  ? "• You can print or save a copy of your responses after submitting"
-                  : "• Your score and feedback appear immediately after you submit"}
+                {quiz.peerReview
+                  ? "• Come back to this link once your teacher opens the review round"
+                  : quiz.survey
+                    ? "• You can print or save a copy of your responses after submitting"
+                    : "• Your score and feedback appear immediately after you submit"}
               </li>
             </ul>
 
-            {quiz.closed ? (
+            {quiz.phase !== "responding" ? (
+              <div className="mt-6 rounded-lg p-4 text-sm" style={{ background: theme.accentSoft }}>
+                <p className="font-semibold">
+                  {quiz.phase === "reviewing" ? "Peer review is open" : "This quiz has finished"}
+                </p>
+                <p className="mt-1" style={{ color: theme.muted }}>
+                  {quiz.phase === "reviewing"
+                    ? "Responses are closed. If you submitted one, you now have a few classmates' answers to mark."
+                    : "Marking is done. If you took part, you can read your result and the comments left on your work."}
+                </p>
+                <a
+                  href={`/q/${slug}/review`}
+                  className="mt-3 inline-block rounded-lg px-5 py-2.5 font-semibold"
+                  style={accentBtn}
+                >
+                  {quiz.phase === "reviewing" ? "Go to peer review" : "See my result"}
+                </a>
+              </div>
+            ) : quiz.closed ? (
               <p className="mt-6 rounded-lg bg-slate-100 text-slate-600 p-4 text-sm font-medium">
                 This quiz is not accepting responses right now.
               </p>

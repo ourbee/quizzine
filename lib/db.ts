@@ -47,6 +47,25 @@ CREATE TABLE IF NOT EXISTS band_schemes (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS band_schemes_owner_idx ON band_schemes(owner);
+
+-- Peer review: a quiz moves responding -> reviewing -> closed.
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS phase text NOT NULL DEFAULT 'responding';
+-- The mark the teacher set by hand, which beats the peer average when present.
+ALTER TABLE attempts ADD COLUMN IF NOT EXISTS teacher_score real;
+CREATE TABLE IF NOT EXISTS peer_reviews (
+  id text PRIMARY KEY,
+  quiz_id text NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+  attempt_id text NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
+  reviewer_attempt_id text NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
+  scores jsonb,
+  comments jsonb,
+  status text NOT NULL DEFAULT 'assigned',
+  assigned_at timestamptz NOT NULL DEFAULT now(),
+  submitted_at timestamptz
+);
+CREATE UNIQUE INDEX IF NOT EXISTS peer_reviews_pair_idx ON peer_reviews(attempt_id, reviewer_attempt_id);
+CREATE INDEX IF NOT EXISTS peer_reviews_quiz_idx ON peer_reviews(quiz_id);
+CREATE INDEX IF NOT EXISTS peer_reviews_reviewer_idx ON peer_reviews(reviewer_attempt_id);
 `;
 
 // Quizzes created before teacher accounts existed get assigned to this owner.
