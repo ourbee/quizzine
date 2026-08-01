@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import Logo from "@/components/Logo";
 
 interface QuizRow {
   id: string;
@@ -136,6 +137,9 @@ export default function TeacherPage() {
   if (state === "login") {
     return (
       <main className="max-w-sm mx-auto px-6 py-24">
+        <Link href="/" className="inline-block mb-6">
+          <Logo size={30} />
+        </Link>
         <h1 className="text-2xl font-bold text-slate-900">Teacher sign-in</h1>
         {GOOGLE_CLIENT_ID ? (
           <>
