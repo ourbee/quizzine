@@ -18,7 +18,13 @@ export interface Question {
   id: string;
   type: QType;
   text: string;
+  /**
+   * Material the student reads before answering — a poem, a sample response, a
+   * paragraph of theory. Repeating the same text on consecutive questions is
+   * how one block is attached to several: see `groupByPassage`.
+   */
   passage?: string;
+  passageTitle?: string; // heading on the block, e.g. "Sample response"
   media?: string; // image / audio / YouTube URL
   options: Option[]; // empty for short/essay
   correct?: string; // option key, mcq only
@@ -139,6 +145,7 @@ export interface RawQuestion {
   text?: string;
   type?: string;
   passage?: string;
+  passageTitle?: string;
   media?: string;
   options: { key: string; text: string; feedback?: string }[];
   correct?: string; // one key, or several ("A,C") for a multi-answer question

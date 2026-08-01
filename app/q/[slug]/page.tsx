@@ -9,8 +9,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { getTheme } from "@/lib/themes";
 import { hashSeed, NO_SEMESTER, SEMESTER_CHOICES, seededShuffle, semesterLabel } from "@/lib/normalize";
-import { correctKeysOf, joinKeys, splitKeys } from "@/lib/questions";
+import { correctKeysOf, groupByPassage, joinKeys, shuffleWithinPassageGroups, splitKeys } from "@/lib/questions";
 import type { ReviewPayload } from "@/lib/types";
+import Material from "@/components/Material";
 import Media from "@/components/Media";
 
 interface PublicOption { key: string; text: string }
@@ -19,6 +20,7 @@ interface PublicQuestion {
   type: "mcq" | "multi" | "short" | "essay";
   text: string;
   passage?: string;
+  passageTitle?: string;
   media?: string;
   points: number;
   graded: boolean;
@@ -199,7 +201,7 @@ export default function StudentQuizPage() {
     if (!quiz || !attempt) return quiz?.questions ?? [];
     const seed = hashSeed(attempt.attemptId);
     let qs = quiz.questions;
-    if (quiz.settings.shuffleQuestions) qs = seededShuffle(qs, seed);
+    if (quiz.settings.shuffleQuestions) qs = shuffleWithinPassageGroups(qs, seed);
     if (quiz.settings.shuffleOptions) {
       qs = qs.map((qn, i) => ({ ...qn, options: seededShuffle(qn.options, seed + i + 1) }));
     }
@@ -397,112 +399,117 @@ export default function StudentQuizPage() {
           )}
 
           <div className="mt-6 space-y-4">
-            {review.questions.map((qn, i) => {
-              const per = review.per.find((p) => p.qid === qn.id);
-              const scored = qn.graded !== false;
-              const choiceQ = qn.type === "mcq" || qn.type === "multi";
-              const chosenKeys = qn.type === "multi" ? splitKeys(per?.answer) : per?.answer ? [per.answer] : [];
-              const rightKeys = scored ? correctKeysOf(qn) : [];
-              const partial = scored && !per?.correct && (per?.awarded ?? 0) > 0;
-              const missed = qn.options.filter((o) => rightKeys.includes(o.key) && !chosenKeys.includes(o.key));
-              const picked = qn.options.filter((o) => chosenKeys.includes(o.key));
-              return (
-                <div key={qn.id} className="rounded-2xl border p-5 shadow-sm print-page" style={cardStyle}>
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="text-xs font-semibold" style={{ color: theme.muted }}>
-                      Q{i + 1}
-                      {scored ? ` · ${qn.points} pt` : ""}
-                    </p>
-                    {!scored ? (
-                      <span className="text-xs font-bold rounded-full px-2.5 py-1 bg-slate-100 text-slate-600">Recorded</span>
-                    ) : !choiceQ ? (
-                      <span className="text-xs font-bold rounded-full px-2.5 py-1 bg-amber-100 text-amber-800">Awaiting review</span>
-                    ) : (
-                      <span
-                        className={`text-xs font-bold rounded-full px-2.5 py-1 ${
-                          per?.correct ? "bg-green-100 text-green-800" : partial ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-700"
-                        }`}
-                      >
-                        {!chosenKeys.length
-                          ? "Not answered"
-                          : per?.correct
-                            ? `Correct +${per.awarded}`
-                            : partial
-                              ? `Partly correct +${per?.awarded}`
-                              : "Incorrect"}
-                      </span>
-                    )}
-                  </div>
-                  {qn.passage && <p className="mt-2 text-sm rounded-lg border p-3" style={{ borderColor: theme.border, color: theme.muted }}>{qn.passage}</p>}
-                  <p className="mt-2 font-medium">{qn.text}</p>
-                  <Media url={qn.media} compact />
-
-                  {choiceQ ? (
-                    <div className="mt-3 space-y-1.5 text-sm">
-                      {qn.options.map((o) => {
-                        const isChosen = chosenKeys.includes(o.key);
-                        const isCorrect = rightKeys.includes(o.key);
-                        // In an unscored question there is nothing to be right about —
-                        // only the student's own choice is highlighted.
-                        const tone = !scored
-                          ? isChosen
-                            ? "border-2"
-                            : ""
-                          : isCorrect
-                            ? "border-green-400 bg-green-50 text-green-900"
-                            : isChosen
-                              ? "border-red-300 bg-red-50 text-red-900"
-                              : "";
-                        return (
-                          <div
-                            key={o.key}
-                            className={`rounded-lg border px-3 py-2 ${tone}`}
-                            style={scored && (isCorrect || isChosen) ? undefined : { borderColor: isChosen ? theme.accent : theme.border }}
+            {groupByPassage(review.questions).map((group) => (
+              <div key={group.start} className="space-y-4">
+                <Material text={group.passage} title={group.passageTitle} colours={theme} collapsible={false} />
+                {group.questions.map((qn, j) => {
+                  const i = group.start + j;
+                  const per = review.per.find((p) => p.qid === qn.id);
+                  const scored = qn.graded !== false;
+                  const choiceQ = qn.type === "mcq" || qn.type === "multi";
+                  const chosenKeys = qn.type === "multi" ? splitKeys(per?.answer) : per?.answer ? [per.answer] : [];
+                  const rightKeys = scored ? correctKeysOf(qn) : [];
+                  const partial = scored && !per?.correct && (per?.awarded ?? 0) > 0;
+                  const missed = qn.options.filter((o) => rightKeys.includes(o.key) && !chosenKeys.includes(o.key));
+                  const picked = qn.options.filter((o) => chosenKeys.includes(o.key));
+                  return (
+                    <div key={qn.id} className="rounded-2xl border p-5 shadow-sm print-page" style={cardStyle}>
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-xs font-semibold" style={{ color: theme.muted }}>
+                          Q{i + 1}
+                          {scored ? ` · ${qn.points} pt` : ""}
+                        </p>
+                        {!scored ? (
+                          <span className="text-xs font-bold rounded-full px-2.5 py-1 bg-slate-100 text-slate-600">Recorded</span>
+                        ) : !choiceQ ? (
+                          <span className="text-xs font-bold rounded-full px-2.5 py-1 bg-amber-100 text-amber-800">Awaiting review</span>
+                        ) : (
+                          <span
+                            className={`text-xs font-bold rounded-full px-2.5 py-1 ${
+                              per?.correct ? "bg-green-100 text-green-800" : partial ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-700"
+                            }`}
                           >
-                            {o.text}
-                            {scored && isCorrect && <span className="ml-1.5 text-xs font-semibold">✓ correct answer</span>}
-                            {scored && isChosen && !isCorrect && <span className="ml-1.5 text-xs font-semibold">your choice</span>}
-                            {scored && isChosen && isCorrect && <span className="ml-1.5 text-xs font-semibold">(your choice)</span>}
-                            {!scored && isChosen && <span className="ml-1.5 text-xs font-semibold">your choice</span>}
-                          </div>
-                        );
-                      })}
-                      {scored && (picked.some((o) => o.feedback) || missed.some((o) => o.feedback) || qn.feedbackCorrect || qn.feedbackIncorrect) && (
-                        <div className="mt-2 rounded-lg p-3 text-sm" style={{ background: theme.accentSoft }}>
-                          {picked
-                            .filter((o) => o.feedback)
-                            .map((o) => (
-                              <p key={o.key} className="mt-1 first:mt-0">
-                                <span className="font-semibold">You chose “{o.text}”:</span> {o.feedback}
-                              </p>
-                            ))}
-                          {missed
-                            .filter((o) => o.feedback)
-                            .map((o) => (
-                              <p key={o.key} className="mt-1">
-                                <span className="font-semibold">“{o.text}” was also correct:</span> {o.feedback}
-                              </p>
-                            ))}
-                          {per?.correct && qn.feedbackCorrect && <p className="mt-1">{qn.feedbackCorrect}</p>}
-                          {!per?.correct && qn.feedbackIncorrect && <p className="mt-1">{qn.feedbackIncorrect}</p>}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="mt-3 text-sm space-y-2">
-                      <div className="rounded-lg border px-3 py-2 whitespace-pre-wrap" style={{ borderColor: theme.border }}>
-                        {per?.answer || <span style={{ color: theme.muted }}>No answer given.</span>}
+                            {!chosenKeys.length
+                              ? "Not answered"
+                              : per?.correct
+                                ? `Correct +${per.awarded}`
+                                : partial
+                                  ? `Partly correct +${per?.awarded}`
+                                  : "Incorrect"}
+                          </span>
+                        )}
                       </div>
-                      {scored && qn.feedbackCorrect && (
-                        <div className="rounded-lg p-3" style={{ background: theme.accentSoft }}>
-                          <span className="font-semibold">Guidance: </span>{qn.feedbackCorrect}
+                      <p className="mt-2 font-medium">{qn.text}</p>
+                      <Media url={qn.media} compact />
+
+                      {choiceQ ? (
+                        <div className="mt-3 space-y-1.5 text-sm">
+                          {qn.options.map((o) => {
+                            const isChosen = chosenKeys.includes(o.key);
+                            const isCorrect = rightKeys.includes(o.key);
+                            // In an unscored question there is nothing to be right about —
+                            // only the student's own choice is highlighted.
+                            const tone = !scored
+                              ? isChosen
+                                ? "border-2"
+                                : ""
+                              : isCorrect
+                                ? "border-green-400 bg-green-50 text-green-900"
+                                : isChosen
+                                  ? "border-red-300 bg-red-50 text-red-900"
+                                  : "";
+                            return (
+                              <div
+                                key={o.key}
+                                className={`rounded-lg border px-3 py-2 ${tone}`}
+                                style={scored && (isCorrect || isChosen) ? undefined : { borderColor: isChosen ? theme.accent : theme.border }}
+                              >
+                                {o.text}
+                                {scored && isCorrect && <span className="ml-1.5 text-xs font-semibold">✓ correct answer</span>}
+                                {scored && isChosen && !isCorrect && <span className="ml-1.5 text-xs font-semibold">your choice</span>}
+                                {scored && isChosen && isCorrect && <span className="ml-1.5 text-xs font-semibold">(your choice)</span>}
+                                {!scored && isChosen && <span className="ml-1.5 text-xs font-semibold">your choice</span>}
+                              </div>
+                            );
+                          })}
+                          {scored && (picked.some((o) => o.feedback) || missed.some((o) => o.feedback) || qn.feedbackCorrect || qn.feedbackIncorrect) && (
+                            <div className="mt-2 rounded-lg p-3 text-sm" style={{ background: theme.accentSoft }}>
+                              {picked
+                                .filter((o) => o.feedback)
+                                .map((o) => (
+                                  <p key={o.key} className="mt-1 first:mt-0">
+                                    <span className="font-semibold">You chose “{o.text}”:</span> {o.feedback}
+                                  </p>
+                                ))}
+                              {missed
+                                .filter((o) => o.feedback)
+                                .map((o) => (
+                                  <p key={o.key} className="mt-1">
+                                    <span className="font-semibold">“{o.text}” was also correct:</span> {o.feedback}
+                                  </p>
+                                ))}
+                              {per?.correct && qn.feedbackCorrect && <p className="mt-1">{qn.feedbackCorrect}</p>}
+                              {!per?.correct && qn.feedbackIncorrect && <p className="mt-1">{qn.feedbackIncorrect}</p>}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="mt-3 text-sm space-y-2">
+                          <div className="rounded-lg border px-3 py-2 whitespace-pre-wrap" style={{ borderColor: theme.border }}>
+                            {per?.answer || <span style={{ color: theme.muted }}>No answer given.</span>}
+                          </div>
+                          {scored && qn.feedbackCorrect && (
+                            <div className="rounded-lg p-3" style={{ background: theme.accentSoft }}>
+                              <span className="font-semibold">Guidance: </span>{qn.feedbackCorrect}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                  );
+                })}
+              </div>
+            ))}
           </div>
 
           <div className="no-print mt-6 rounded-2xl border p-5 text-center shadow-sm" style={cardStyle}>
@@ -751,13 +758,15 @@ export default function StudentQuizPage() {
       return { ...a, [qid]: joinKeys(next) };
     });
 
-  const renderQuestion = (qn: PublicQuestion, i: number) => (
+  // One question at a time means the material cannot sit above the run, so it
+  // travels with each question instead; on the scrolling page it is shown once.
+  const renderQuestion = (qn: PublicQuestion, i: number, withMaterial = false) => (
     <div key={qn.id} className="rounded-2xl border p-5 shadow-sm" style={cardStyle}>
       <p className="text-xs font-semibold" style={{ color: theme.muted }}>
         Question {i + 1} of {ordered.length}
         {qn.graded ? ` · ${qn.points} pt` : ""}
       </p>
-      {qn.passage && <p className="mt-2 text-sm rounded-lg border p-3 whitespace-pre-wrap" style={{ borderColor: theme.border, color: theme.muted }}>{qn.passage}</p>}
+      {withMaterial && <Material text={qn.passage} title={qn.passageTitle} colours={theme} />}
       <p className="mt-2 font-medium text-lg">{qn.text}</p>
       <Media url={qn.media} />
       {qn.type === "mcq" || qn.type === "multi" ? (
@@ -835,7 +844,7 @@ export default function StudentQuizPage() {
       <main className="max-w-2xl mx-auto px-4 mt-6 space-y-5">
         {perQuestionMode ? (
           <>
-            {renderQuestion(ordered[index], index)}
+            {renderQuestion(ordered[index], index, true)}
             <div className="flex justify-end">
               <button
                 onClick={() => (index < ordered.length - 1 ? setIndex((i) => i + 1) : submit())}
@@ -849,7 +858,12 @@ export default function StudentQuizPage() {
           </>
         ) : (
           <>
-            {ordered.map((qn, i) => renderQuestion(qn, i))}
+            {groupByPassage(ordered).map((group) => (
+              <div key={group.start} className="space-y-5">
+                <Material text={group.passage} title={group.passageTitle} colours={theme} />
+                {group.questions.map((qn, j) => renderQuestion(qn, group.start + j))}
+              </div>
+            ))}
             <div className="rounded-2xl border p-5 shadow-sm text-center" style={cardStyle}>
               <p className="text-sm" style={{ color: theme.muted }}>
                 {answered < ordered.length

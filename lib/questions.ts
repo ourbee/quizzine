@@ -3,6 +3,7 @@
  * https://github.com/ourbee
  */
 
+import { seededShuffle } from "./normalize.ts";
 import type { Question } from "./types";
 
 /**
@@ -52,4 +53,53 @@ export function maxPoints(questions: Question[]): number {
 /** True when no question in the quiz is scored, so there is no mark to show. */
 export function isSurvey(questions: Question[]): boolean {
   return questions.length > 0 && questions.every((qn) => !isGraded(qn));
+}
+
+/** Anything carrying a passage: the stored question, or the sanitized public one. */
+type PassageOwner = { passage?: string; passageTitle?: string };
+
+export interface PassageGroup<T> {
+  /** Material to show once above these questions; absent when they have none. */
+  passage?: string;
+  passageTitle?: string;
+  questions: T[];
+  /** Position of the first question in the original list, so numbering survives. */
+  start: number;
+}
+
+/**
+ * Fold a run of consecutive questions that share the same passage into one
+ * group, so a poem or a sample response is shown once above the questions on
+ * it rather than repeated over each. A teacher writes that run by filling the
+ * same Passage cell down several rows — which is also why the comparison is on
+ * the trimmed text: spreadsheets are careless with trailing spaces.
+ *
+ * Questions with no passage are grouped too (with no material), which keeps the
+ * caller to a single loop.
+ */
+export function groupByPassage<T extends PassageOwner>(questions: T[]): PassageGroup<T>[] {
+  const groups: PassageGroup<T>[] = [];
+  questions.forEach((qn, i) => {
+    const passage = qn.passage?.trim() || undefined;
+    const passageTitle = qn.passageTitle?.trim() || undefined;
+    const last = groups[groups.length - 1];
+    if (last && last.passage === passage && last.passageTitle === passageTitle) last.questions.push(qn);
+    else groups.push({ passage, passageTitle, questions: [qn], start: i });
+  });
+  return groups;
+}
+
+/**
+ * Shuffle questions without stranding one from the material it belongs to: a
+ * run sharing a passage moves as a single unit (its questions shuffled among
+ * themselves), while questions with no material shuffle freely as before. A
+ * quiz without passages is therefore shuffled exactly as it always was.
+ */
+export function shuffleWithinPassageGroups<T extends PassageOwner>(questions: T[], seed: number): T[] {
+  const units: T[][] = [];
+  for (const group of groupByPassage(questions)) {
+    if (group.passage) units.push(group.questions);
+    else for (const qn of group.questions) units.push([qn]);
+  }
+  return seededShuffle(units, seed).flatMap((unit, i) => (unit.length > 1 ? seededShuffle(unit, seed + i + 1) : unit));
 }

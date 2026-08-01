@@ -70,9 +70,15 @@ When `NEXT_PUBLIC_GOOGLE_CLIENT_ID` is not set, the dashboard falls back to the 
 
 Download the Excel template from the New quiz screen, or use these columns:
 
-`Question | Type | OptionA–D | CorrectAnswer | FeedbackA–D | Points | MediaURL | Passage`
+`Question | Type | OptionA–D | CorrectAnswer | FeedbackA–D | Points | MediaURL | Passage | PassageTitle`
 
 `MediaURL` accepts image, audio, or YouTube links — YouTube URLs render as embedded players. JSON and plain-text block formats are documented inside the in-app AI prompt.
+
+### Material to read first
+
+`Passage` holds anything the student reads before answering — an extract, a paragraph of theory, a sample response to imitate — and `PassageTitle` heads it ("Sample response", "Read this first"). Both are optional; most quizzes leave them empty.
+
+To put one passage in front of several questions, copy the same text down each of their rows. Consecutive questions whose `Passage` (and `PassageTitle`) match exactly are treated as one run: the material is shown **once**, above them all, and repeats per screen only when the per-question timer puts students on one question at a time. Change the text and a new run begins, so a single paper can carry a different passage for each section. Shuffling keeps such a run together and shuffles within it, so no question is ever separated from its material.
 
 ## Several quizzes from one file
 

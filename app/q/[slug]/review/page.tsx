@@ -9,8 +9,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { getTheme } from "@/lib/themes";
 import { NO_SEMESTER, SEMESTER_CHOICES } from "@/lib/normalize";
+import { groupByPassage } from "@/lib/questions";
 import type { PeerCriterion, QuestionFeedback } from "@/lib/peer";
 import type { ReviewPayload } from "@/lib/types";
+import Material from "@/components/Material";
 
 interface Feedback {
   total: number | null;
@@ -38,6 +40,7 @@ interface ReviewQuestion {
   id: string;
   text: string;
   passage?: string;
+  passageTitle?: string;
 }
 
 interface Session {
@@ -277,11 +280,7 @@ export default function PeerReviewPage() {
                 <p className="text-xs font-semibold" style={{ color: theme.muted }}>
                   Question {i + 1} of {fb.questions.length}
                 </p>
-                {qn.passage && (
-                  <p className="mt-2 whitespace-pre-wrap rounded-lg border p-3 text-sm" style={{ borderColor: theme.border, color: theme.muted }}>
-                    {qn.passage}
-                  </p>
-                )}
+                <Material text={qn.passage} title={qn.passageTitle} colours={theme} collapsible={false} />
                 <p className="mt-2 font-medium">{qn.text}</p>
 
                 <p className="mt-4 text-xs font-semibold" style={{ color: theme.muted }}>Your response</p>
@@ -426,72 +425,72 @@ export default function PeerReviewPage() {
         )}
 
         {task &&
-          session.questions.map((qn, qi) => (
-            <div key={qn.id} className="rounded-2xl border p-5 shadow-sm" style={cardStyle}>
-              <p className="text-xs font-semibold" style={{ color: theme.muted }}>
-                {task.label} · Part {qi + 1} of {session.questions.length}
-              </p>
-              {qn.passage && (
-                <p className="mt-2 whitespace-pre-wrap rounded-lg border p-3 text-sm" style={{ borderColor: theme.border, color: theme.muted }}>
-                  {qn.passage}
-                </p>
-              )}
-              <p className="mt-2 font-medium">{qn.text}</p>
+          groupByPassage(session.questions).map((group) => (
+            <div key={group.start} className="space-y-5">
+              <Material text={group.passage} title={group.passageTitle} colours={theme} collapsible={false} />
+              {group.questions.map((qn, j) => (
+                <div key={qn.id} className="rounded-2xl border p-5 shadow-sm" style={cardStyle}>
+                  <p className="text-xs font-semibold" style={{ color: theme.muted }}>
+                    {task.label} · Part {group.start + j + 1} of {session.questions.length}
+                  </p>
+                  <p className="mt-2 font-medium">{qn.text}</p>
 
-              <div className="mt-3 rounded-xl border p-4" style={{ borderColor: theme.border, background: theme.accentSoft }}>
-                <p className="text-xs font-semibold" style={{ color: theme.muted }}>Their answer</p>
-                <p className="mt-1 whitespace-pre-wrap text-sm">
-                  {task.answers[qn.id]?.trim() || <span style={{ color: theme.muted }}>They left this blank.</span>}
-                </p>
-              </div>
+                  <div className="mt-3 rounded-xl border p-4" style={{ borderColor: theme.border, background: theme.accentSoft }}>
+                    <p className="text-xs font-semibold" style={{ color: theme.muted }}>Their answer</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm">
+                      {task.answers[qn.id]?.trim() || <span style={{ color: theme.muted }}>They left this blank.</span>}
+                    </p>
+                  </div>
 
-              <div className="mt-4 space-y-3">
-                {session.criteria.map((c) => {
-                  const value = scores?.[qn.id]?.[c.id];
-                  return (
-                    <div key={c.id}>
-                      <div className="flex items-baseline justify-between">
-                        <label className="text-sm font-semibold">{c.label}</label>
-                        <span className="text-xs" style={{ color: theme.muted }}>
-                          {Number.isFinite(value) ? `${value} / ${c.max}` : `— / ${c.max}`}
-                        </span>
-                      </div>
-                      <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {Array.from({ length: c.max + 1 }, (_, n) => (
-                          <button
-                            key={n}
-                            type="button"
-                            onClick={() =>
-                              setScores((s) => ({ ...s, [qn.id]: { ...(s[qn.id] ?? {}), [c.id]: n } }))
-                            }
-                            aria-pressed={value === n}
-                            className="h-9 w-9 rounded-lg border-2 text-sm font-semibold"
-                            style={
-                              value === n
-                                ? { borderColor: theme.accent, background: theme.accent, color: theme.accentText }
-                                : { borderColor: theme.border }
-                            }
-                          >
-                            {n}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                  <div className="mt-4 space-y-3">
+                    {session.criteria.map((c) => {
+                      const value = scores?.[qn.id]?.[c.id];
+                      return (
+                        <div key={c.id}>
+                          <div className="flex items-baseline justify-between">
+                            <label className="text-sm font-semibold">{c.label}</label>
+                            <span className="text-xs" style={{ color: theme.muted }}>
+                              {Number.isFinite(value) ? `${value} / ${c.max}` : `— / ${c.max}`}
+                            </span>
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {Array.from({ length: c.max + 1 }, (_, n) => (
+                              <button
+                                key={n}
+                                type="button"
+                                onClick={() =>
+                                  setScores((s) => ({ ...s, [qn.id]: { ...(s[qn.id] ?? {}), [c.id]: n } }))
+                                }
+                                aria-pressed={value === n}
+                                className="h-9 w-9 rounded-lg border-2 text-sm font-semibold"
+                                style={
+                                  value === n
+                                    ? { borderColor: theme.accent, background: theme.accent, color: theme.accentText }
+                                    : { borderColor: theme.border }
+                                }
+                              >
+                                {n}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
 
-              <label className="mt-4 block text-sm font-semibold">
-                Comment{session.commentRequired ? "" : " (optional)"}
-                <textarea
-                  value={comments[qn.id] ?? ""}
-                  onChange={(e) => setComments((c) => ({ ...c, [qn.id]: e.target.value }))}
-                  rows={4}
-                  placeholder="What worked, and what would make it stronger?"
-                  className="mt-1.5 w-full rounded-xl border-2 bg-white px-4 py-3 text-sm font-normal text-slate-900 focus:outline-none"
-                  style={{ borderColor: theme.border }}
-                />
-              </label>
+                  <label className="mt-4 block text-sm font-semibold">
+                    Comment{session.commentRequired ? "" : " (optional)"}
+                    <textarea
+                      value={comments[qn.id] ?? ""}
+                      onChange={(e) => setComments((c) => ({ ...c, [qn.id]: e.target.value }))}
+                      rows={4}
+                      placeholder="What worked, and what would make it stronger?"
+                      className="mt-1.5 w-full rounded-xl border-2 bg-white px-4 py-3 text-sm font-normal text-slate-900 focus:outline-none"
+                      style={{ borderColor: theme.border }}
+                    />
+                  </label>
+                </div>
+              ))}
             </div>
           ))}
 

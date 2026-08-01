@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
     reviewerAttemptId: mine.id,
     criteria: config.criteria,
     commentRequired: config.commentRequired,
-    questions: questions.map((qn) => ({ id: qn.id, text: qn.text, passage: qn.passage })),
+    questions: questions.map((qn) => ({ id: qn.id, text: qn.text, passage: qn.passage, passageTitle: qn.passageTitle })),
     tasks,
     feedback,
   });

@@ -12,11 +12,12 @@ import QRCode from "qrcode";
 import { parseJsonText, parsePastedText, parseWorkbookSheets } from "@/lib/parsers";
 import { looksLikeAppsScript, parseAppsScript } from "@/lib/appsscript";
 import { validateQuestions } from "@/lib/validate";
-import { correctKeysOf, isGraded } from "@/lib/questions";
+import { correctKeysOf, groupByPassage, isGraded } from "@/lib/questions";
 import { DEFAULT_PEER_CONFIG, peerMaxScore, type PeerConfig } from "@/lib/peer";
 import { AI_PROMPT } from "@/lib/aiprompt";
 import { THEMES } from "@/lib/themes";
 import type { GradingMode, MultiScoring, ParsedQuiz, Question, TimerMode } from "@/lib/types";
+import Material from "@/components/Material";
 import Media from "@/components/Media";
 
 type Step = "intake" | "review" | "settings" | "done";
@@ -55,7 +56,7 @@ interface PublishResult {
 const TEMPLATE_HEADERS = [
   "Question", "Type", "OptionA", "OptionB", "OptionC", "OptionD",
   "CorrectAnswer", "FeedbackA", "FeedbackB", "FeedbackC", "FeedbackD",
-  "Points", "MediaURL", "Passage",
+  "Points", "MediaURL", "Passage", "PassageTitle",
 ];
 
 // Shown on the intake screen so the Type column is self-explanatory.
@@ -67,6 +68,17 @@ const TYPE_GUIDE: { type: string; what: string }[] = [
   { type: "open", what: "typed answer with no correct answer, e.g. a reflection or peer-reviewed task" },
 ];
 
+/**
+ * Material for the two rows below. Both carry it identically, which is how one
+ * passage is attached to several questions: students read it once, above both.
+ */
+const SAMPLE_RESPONSE =
+  "A strong answer names the device, quotes the line it works in, and then says what the quotation does. " +
+  "For example: Tennyson ends on 'strong in will', delaying the noun until the line has already spent itself on " +
+  "'made weak by time and fate' — so the metre enacts the effort the speaker is claiming. Notice that the quotation " +
+  "is short, embedded in the sentence, and followed by a claim rather than a paraphrase. Aim for that shape: " +
+  "point, evidence, effect.";
+
 const TEMPLATE_ROWS = [
   {
     Question: "Which word is a synonym of 'ubiquitous'?",
@@ -76,13 +88,13 @@ const TEMPLATE_ROWS = [
     FeedbackB: "Correct: 'ubiquitous' means present everywhere at once, i.e. omnipresent.",
     FeedbackC: "'Fragile' describes physical delicacy, not how widespread something is.",
     FeedbackD: "'Ancient' refers to age, not distribution.",
-    Points: 1, MediaURL: "", Passage: "",
+    Points: 1, MediaURL: "", Passage: "", PassageTitle: "",
   },
   {
     Question: "In two or three sentences, explain the difference between a metaphor and a simile.",
     Type: "short", OptionA: "", OptionB: "", OptionC: "", OptionD: "",
     CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
-    Points: 2, MediaURL: "", Passage: "",
+    Points: 2, MediaURL: "", Passage: "", PassageTitle: "",
   },
   {
     Question: "Which of these are figures of speech? Tick all that apply.",
@@ -92,19 +104,38 @@ const TEMPLATE_ROWS = [
     FeedbackB: "Iambic pentameter is a metre — a matter of rhythm, not of figurative meaning.",
     FeedbackC: "Correct: synecdoche lets a part stand for the whole, or the whole for a part.",
     FeedbackD: "A quatrain is a four-line stanza, a unit of form rather than a figure of speech.",
-    Points: 2, MediaURL: "", Passage: "",
+    Points: 2, MediaURL: "", Passage: "", PassageTitle: "",
   },
   {
     Question: "Which of these poets did you find most rewarding to read this term?",
     Type: "poll", OptionA: "Kamala Das", OptionB: "A. K. Ramanujan", OptionC: "Arun Kolatkar", OptionD: "Eunice de Souza",
     CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
-    Points: "", MediaURL: "", Passage: "",
+    Points: "", MediaURL: "", Passage: "", PassageTitle: "",
   },
   {
     Question: "What is one thing from this term's reading you would like to discuss further in class?",
     Type: "open", OptionA: "", OptionB: "", OptionC: "", OptionD: "",
     CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
-    Points: "", MediaURL: "", Passage: "",
+    Points: "", MediaURL: "", Passage: "", PassageTitle: "",
+  },
+  // The last two rows share one passage — copy the cell down and it is shown once.
+  {
+    Question: "Following the sample above, analyse how enjambment works in the poem's closing lines. (Max 200 words.)",
+    Type: "short", OptionA: "", OptionB: "", OptionC: "", OptionD: "",
+    CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
+    Points: 5, MediaURL: "", Passage: SAMPLE_RESPONSE, PassageTitle: "Sample response — write yours like this",
+  },
+  {
+    Question: "Which part of the sample answer above is the claim, as opposed to the evidence?",
+    Type: "mcq",
+    OptionA: "The quotation from Tennyson", OptionB: "The statement that the metre enacts the speaker's effort",
+    OptionC: "The name of the poet", OptionD: "The instruction to aim for point, evidence, effect",
+    CorrectAnswer: "B",
+    FeedbackA: "That is the evidence — the words quoted from the poem.",
+    FeedbackB: "Correct: it is the reading being argued for, which the quotation is there to support.",
+    FeedbackC: "Naming the poet is context, not an argument about the text.",
+    FeedbackD: "That is advice about structure rather than a claim about the poem.",
+    Points: 1, MediaURL: "", Passage: SAMPLE_RESPONSE, PassageTitle: "Sample response — write yours like this",
   },
 ];
 
@@ -449,6 +480,22 @@ export default function NewQuizPage() {
                 if you would rather have JSON, plain text or an Apps Script.
               </p>
             </details>
+            <details className="mt-2">
+              <summary className="cursor-pointer text-sm font-semibold text-blue-800">
+                Giving students something to read first — a passage, a sample response, some theory
+              </summary>
+              <p className="mt-2 text-sm text-blue-900">
+                Put it in the <code className="rounded bg-white px-1.5 py-0.5 text-xs font-semibold text-blue-800">Passage</code> column
+                and head it with{" "}
+                <code className="rounded bg-white px-1.5 py-0.5 text-xs font-semibold text-blue-800">PassageTitle</code> — for example
+                &ldquo;Sample response&rdquo; or &ldquo;Read this first&rdquo;. Both are optional and most quizzes leave them empty.
+              </p>
+              <p className="mt-2 text-sm text-blue-900">
+                To put one passage in front of several questions, copy the same text down each of their rows: identical
+                text on neighbouring rows is shown <strong>once</strong>, above them all. Change the text and a new block
+                begins, so one paper can carry a different passage for each section.
+              </p>
+            </details>
           </div>
 
           <div className="flex gap-2 text-sm font-semibold">
@@ -681,47 +728,52 @@ export default function NewQuizPage() {
                           This is how they will read (correct answers marked here only — students never receive them before submitting).
                         </p>
                         <div className="space-y-4">
-                          {draft.questions.map((qn, i) => {
-                            const scored = isGraded(qn);
-                            const keys = correctKeysOf(qn);
-                            return (
-                              <div key={qn.id} className="rounded-xl border border-slate-200 bg-white p-4">
-                                <p className="text-xs font-semibold text-slate-400">
-                                  Q{i + 1} · {qn.type === "multi" ? "MULTI-ANSWER" : qn.type.toUpperCase()} ·{" "}
-                                  {scored ? `${qn.points} pt` : "not scored"}
-                                </p>
-                                {qn.passage && <p className="mt-2 text-sm bg-slate-50 border border-slate-200 rounded-lg p-3 text-slate-700">{qn.passage}</p>}
-                                <p className="mt-1.5 font-medium text-slate-900">{qn.text}</p>
-                                <Media url={qn.media} compact />
-                                {qn.type === "mcq" || qn.type === "multi" ? (
-                                  <>
-                                    {qn.type === "multi" && scored && (
-                                      <p className="mt-2 text-xs font-semibold text-blue-700">
-                                        Students tick all that apply — {keys.length} correct answers.
+                          {groupByPassage(draft.questions).map((group) => (
+                            <div key={group.start} className="space-y-4">
+                              <Material text={group.passage} title={group.passageTitle} compact />
+                              {group.questions.map((qn, j) => {
+                                const i = group.start + j;
+                                const scored = isGraded(qn);
+                                const keys = correctKeysOf(qn);
+                                return (
+                                  <div key={qn.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                                    <p className="text-xs font-semibold text-slate-400">
+                                      Q{i + 1} · {qn.type === "multi" ? "MULTI-ANSWER" : qn.type.toUpperCase()} ·{" "}
+                                      {scored ? `${qn.points} pt` : "not scored"}
+                                    </p>
+                                    <p className="mt-1.5 font-medium text-slate-900">{qn.text}</p>
+                                    <Media url={qn.media} compact />
+                                    {qn.type === "mcq" || qn.type === "multi" ? (
+                                      <>
+                                        {qn.type === "multi" && scored && (
+                                          <p className="mt-2 text-xs font-semibold text-blue-700">
+                                            Students tick all that apply — {keys.length} correct answers.
+                                          </p>
+                                        )}
+                                        <ul className="mt-2 space-y-1.5">
+                                          {qn.options.map((o) => {
+                                            const right = scored && keys.includes(o.key);
+                                            return (
+                                              <li key={o.key} className={`text-sm rounded-lg px-3 py-1.5 border ${right ? "border-green-300 bg-green-50 text-green-900" : "border-slate-200 text-slate-700"}`}>
+                                                <span className="font-semibold">{o.key}.</span> {o.text}
+                                                {right && <span className="ml-1 text-xs font-semibold">✓ correct</span>}
+                                                {o.feedback && <p className="text-xs text-slate-500 mt-0.5">↳ {o.feedback}</p>}
+                                              </li>
+                                            );
+                                          })}
+                                        </ul>
+                                        {!scored && <p className="mt-2 text-xs italic text-slate-500">No correct answer — responses are collected only.</p>}
+                                      </>
+                                    ) : (
+                                      <p className="mt-2 text-sm italic text-slate-500">
+                                        {scored ? "Typed answer — graded by you later." : "Typed answer — collected, not graded."}
                                       </p>
                                     )}
-                                    <ul className="mt-2 space-y-1.5">
-                                      {qn.options.map((o) => {
-                                        const right = scored && keys.includes(o.key);
-                                        return (
-                                          <li key={o.key} className={`text-sm rounded-lg px-3 py-1.5 border ${right ? "border-green-300 bg-green-50 text-green-900" : "border-slate-200 text-slate-700"}`}>
-                                            <span className="font-semibold">{o.key}.</span> {o.text}
-                                            {right && <span className="ml-1 text-xs font-semibold">✓ correct</span>}
-                                            {o.feedback && <p className="text-xs text-slate-500 mt-0.5">↳ {o.feedback}</p>}
-                                          </li>
-                                        );
-                                      })}
-                                    </ul>
-                                    {!scored && <p className="mt-2 text-xs italic text-slate-500">No correct answer — responses are collected only.</p>}
-                                  </>
-                                ) : (
-                                  <p className="mt-2 text-sm italic text-slate-500">
-                                    {scored ? "Typed answer — graded by you later." : "Typed answer — collected, not graded."}
-                                  </p>
-                                )}
-                              </div>
-                            );
-                          })}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ))}
                         </div>
                       </>
                     )}

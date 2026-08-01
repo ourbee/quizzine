@@ -119,19 +119,25 @@ export function validateQuestions(parsed: ParsedQuiz, gradingMode: GradingMode =
     const explicit = readGradedFlag(raw.graded);
     const graded = surveyQuiz ? false : (explicit ?? spec.graded !== false);
 
-    let points = 1;
-    if (raw.points !== undefined && raw.points !== "") {
-      points = Number(raw.points);
-      if (!Number.isFinite(points) || points <= 0) {
-        errors.push(`${row}: Points must be a positive number (got "${raw.points}").`);
-        return;
+    // An unscored question is worth nothing whatever the file says, so its
+    // Points cell is never validated — writing 0 there is the natural thing to
+    // do and must not block publishing.
+    let points = 0;
+    if (graded) {
+      points = 1;
+      if (raw.points !== undefined && raw.points !== "") {
+        points = Number(raw.points);
+        if (!Number.isFinite(points) || points <= 0) {
+          errors.push(`${row}: Points must be a positive number (got "${raw.points}").`);
+          return;
+        }
       }
+    } else if (raw.points !== undefined && raw.points !== "" && Number(raw.points) > 0 && !surveyQuiz) {
+      warnings.push(`${row}: Points are ignored because this question is not scored.`);
     }
-    if (!graded) {
-      if (raw.points !== undefined && raw.points !== "" && Number(raw.points) > 0 && !surveyQuiz) {
-        warnings.push(`${row}: Points are ignored because this question is not scored.`);
-      }
-      points = 0;
+
+    if ((raw.passageTitle ?? "").toString().trim() && !(raw.passage ?? "").toString().trim()) {
+      warnings.push(`${row}: PassageTitle has no Passage to head, so the heading is not shown.`);
     }
 
     const media = (raw.media ?? "").toString().trim() || undefined;
@@ -144,6 +150,7 @@ export function validateQuestions(parsed: ParsedQuiz, gradingMode: GradingMode =
       type,
       text,
       passage: (raw.passage ?? "").toString().trim() || undefined,
+      passageTitle: (raw.passageTitle ?? "").toString().trim() || undefined,
       media,
       options: [],
       points,

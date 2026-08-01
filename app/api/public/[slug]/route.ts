@@ -39,6 +39,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
     type: qn.type,
     text: qn.text,
     passage: qn.passage,
+    passageTitle: qn.passageTitle,
     media: qn.media,
     points: qn.points,
     graded: isGraded(qn),

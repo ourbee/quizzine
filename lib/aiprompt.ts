@@ -58,18 +58,19 @@ Use "poll" and "open" for anything I describe as a survey, opinion poll, reflect
 QUALITY RULES (mandatory):
 1. Every "mcq" must have exactly one defensible correct answer; every "multi" must have at least two correct answers and at least one wrong one. "poll" and "open" questions have no correct answer at all — do not supply one.
 2. Provide feedback for EVERY option (A, B, C and D) on graded questions — for correct options explain why they are right; for each wrong option explain the specific misunderstanding that makes it wrong. Poll options need no feedback.
-3. Feedback must be SELF-CONTAINED and ANONYMISED: never mention the source material, attachment, book, passage, study guide, website, or page numbers. Write "The novel was published in 1967", never "The source/LitChart/passage says 1967".
+3. Feedback must be SELF-CONTAINED and ANONYMISED: never mention the source material, attachment, book, passage, study guide, website, or page numbers. Write "The novel was published in 1967", never "The source/LitChart/passage says 1967". The one exception is material you put in the Passage column: the student can see that, so questions and feedback may refer to it ("in the extract above").
 4. Never refer to options by letter or position in any feedback or question text ("option C", "the third option", "both A and B") — options are shuffled for every student, so letters are meaningless to them. Refer to the option's content instead.
 5. No "All of the above", "None of the above", or negative/meta options. If you want several answers to count, use type "multi" instead.
 6. Distractors must be plausible; keep all options similar in length and grammatical form.
 7. Balance the answer key roughly evenly across A–D.
 8. If I attached source material, base every question strictly on it and do not invent facts — but write questions and feedback so they stand alone without it.
 9. MediaURL is optional: a public image, audio file, or YouTube link relevant to the question.
+10. Passage is optional material the student reads BEFORE answering — a poem, an extract, a paragraph of theory, or a sample response to imitate. PassageTitle heads it ("Sample response", "Read this first", "The passage"). Leave both empty unless I ask for material or my source material only makes sense if quoted to the student. To put ONE passage in front of SEVERAL questions, repeat the identical Passage and PassageTitle text on every one of those rows, keeping them next to each other — the app shows repeated material once, above the whole run. Do not paraphrase it differently on each row or it will be shown again each time.
 
 OUTPUT FORMATS:
 
 FORMAT A — Excel/CSV. THIS IS THE DEFAULT: use it unless I have explicitly named another format. A table with EXACTLY these columns, one row per question:
-Question | Type | OptionA | OptionB | OptionC | OptionD | CorrectAnswer | FeedbackA | FeedbackB | FeedbackC | FeedbackD | Points | MediaURL | Passage
+Question | Type | OptionA | OptionB | OptionC | OptionD | CorrectAnswer | FeedbackA | FeedbackB | FeedbackC | FeedbackD | Points | MediaURL | Passage | PassageTitle
 (Give me a downloadable .xlsx file if you can produce one — that is what I want by default. If you cannot, give me a CSV code block I can paste into a spreadsheet instead. CorrectAnswer holds letters only — one letter for "mcq", several comma-separated for "multi", empty for "poll", "open", "short" and "essay". For several quizzes, put each quiz on its own sheet and name the sheet after the quiz — the app builds one quiz per sheet.)
 
 FORMAT B — JSON: a single code block:
@@ -89,7 +90,8 @@ FORMAT B — JSON: a single code block:
       "correct": "B",
       "points": 1,
       "media": "",
-      "passage": ""
+      "passage": "",
+      "passageTitle": ""
     }
   ]
 }
@@ -112,6 +114,8 @@ FD: feedback for D
 Correct: B
 Points: 1
 Media: (optional URL)
+Passage: (optional material to read first — repeat it verbatim on each question it covers)
+PassageTitle: (optional heading for that material)
 
 (For "multi" write Correct: A,C — for "poll" and "open" leave the Correct line out altogether.)
 

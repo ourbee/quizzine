@@ -45,7 +45,8 @@ export function parseSheetRows(rows: Record<string, unknown>[]): ParsedQuiz {
       ...emptyQuestion(),
       text,
       type: get("type", "questiontype"),
-      passage: get("passage", "context"),
+      passage: get("passage", "context", "material"),
+      passageTitle: get("passagetitle", "materialtitle", "contexttitle", "passageheading"),
       media: get("mediaurl", "media", "imageurl", "image", "url"),
       correct: get("correctanswer", "correct", "answer", "key", "correctanswers", "answers"),
       graded: get("graded", "scored", "marked", "hascorrectanswer"),
@@ -117,6 +118,8 @@ export function parseJsonText(text: string): ParsedQuiz {
       text: item.question !== undefined ? String(item.question) : item.text !== undefined ? String(item.text) : undefined,
       type: item.type !== undefined ? String(item.type) : undefined,
       passage: item.passage !== undefined ? String(item.passage) : undefined,
+      passageTitle:
+        (item.passageTitle ?? item.passagetitle) !== undefined ? String(item.passageTitle ?? item.passagetitle) : undefined,
       media: (item.media ?? item.mediaUrl ?? item.imageUrl) !== undefined ? String(item.media ?? item.mediaUrl ?? item.imageUrl) : undefined,
       correct: readCorrect(item),
       graded: item.graded as string | boolean | undefined,
@@ -155,7 +158,7 @@ export function parseJsonText(text: string): ParsedQuiz {
 /**
  * Parse the plain-text/markdown block format:
  *   Title: ... / Description: ... at the top, then per question:
- *   Q: text | Type: | Passage: | Media: | A:..F: options | FA:..FF: option feedback |
+ *   Q: text | Type: | Passage: | PassageTitle: | Media: | A:..F: options | FA:..FF: option feedback |
  *   Correct: A | Points: 1 | FeedbackCorrect: | FeedbackIncorrect:
  * Lines that don't start with a key continue the previous value.
  */
@@ -164,7 +167,7 @@ export function parseMarkdownText(text: string): ParsedQuiz {
   let current: RawQuestion | null = null;
   let append: ((s: string) => void) | null = null;
 
-  const keyRe = /^\s*(Q|Question|Type|Passage|Media|MediaURL|Correct|CorrectAnswer|CorrectAnswers|Answer|Answers|Graded|Scored|Points|Marks|Title|Description|FeedbackCorrect|FeedbackIncorrect|F[A-F]|[A-F])\s*[:.)]\s?(.*)$/i;
+  const keyRe = /^\s*(Q|Question|Type|PassageTitle|Passage|Media|MediaURL|Correct|CorrectAnswer|CorrectAnswers|Answer|Answers|Graded|Scored|Points|Marks|Title|Description|FeedbackCorrect|FeedbackIncorrect|F[A-F]|[A-F])\s*[:.)]\s?(.*)$/i;
 
   for (const line of text.split(/\r?\n/)) {
     const m = line.match(keyRe);
@@ -194,7 +197,8 @@ export function parseMarkdownText(text: string): ParsedQuiz {
       else if (key === "PASSAGE") {
         q.passage = value;
         append = (s) => (q.passage = `${q.passage} ${s}`);
-      } else if (key === "MEDIA" || key === "MEDIAURL") q.media = value;
+      } else if (key === "PASSAGETITLE") q.passageTitle = value;
+      else if (key === "MEDIA" || key === "MEDIAURL") q.media = value;
       else if (key === "CORRECT" || key === "CORRECTANSWER" || key === "CORRECTANSWERS" || key === "ANSWER" || key === "ANSWERS")
         q.correct = value;
       else if (key === "GRADED" || key === "SCORED") q.graded = value;
