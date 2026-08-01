@@ -331,7 +331,7 @@ export default function StudentQuizPage() {
                 <p className="mt-4 text-3xl font-bold" style={{ color: theme.accent }}>Response recorded</p>
                 <p className="mt-1 text-sm" style={{ color: theme.muted }}>
                   {review.peerReview
-                    ? "Thank you — your classmates will mark this. Reload this page when your teacher opens the peer-review round; if you stay on it, you will be taken through automatically."
+                    ? "Thank you — your classmates will mark this. Use the button below when your teacher opens the peer-review round; if you stay on this page, you will be taken through automatically."
                     : "Thank you — this one is not scored, so there is nothing to mark."}
                   {review.flags.late && " Submitted late."}
                 </p>
@@ -364,7 +364,7 @@ export default function StudentQuizPage() {
                 {quiz.phase === "reviewing"
                   ? "Your turn to mark your classmates"
                   : quiz.phase === "closed"
-                    ? "Peer review is finished"
+                    ? "Peer review is complete"
                     : "Peer review has not opened yet"}
               </h2>
               <p className="mt-1 text-sm" style={{ color: theme.muted }}>
@@ -372,7 +372,7 @@ export default function StudentQuizPage() {
                   ? "A few classmates' answers are waiting for you. You will not be told whose work it is, and they will never be told who marked theirs."
                   : quiz.phase === "closed"
                     ? "Your mark and the comments your classmates left on your work are ready."
-                    : "Your teacher has not opened the round yet. Stay on this page and you will be taken through the moment it opens — or reload it later."}
+                    : "Your teacher has not opened the round yet. Stay on this page and you will be taken through the moment it opens, or tap the button below once they announce it."}
               </p>
               {quiz.phase === "responding" ? (
                 <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -382,7 +382,7 @@ export default function StudentQuizPage() {
                     className="rounded-lg px-5 py-2.5 font-semibold disabled:opacity-50"
                     style={accentBtn}
                   >
-                    {rechecking ? "Checking…" : "Check if it has opened"}
+                    {rechecking ? "Checking…" : "Review my peers"}
                   </button>
                   {!!recheckedAt && !rechecking && (
                     <span className="text-sm" style={{ color: theme.muted }}>Not open yet — try again later.</span>
@@ -669,7 +669,7 @@ export default function StudentQuizPage() {
                               arr.map((x, j) => (j === i ? { ...x, roll: e.target.value.replace(/\D/g, "") } : x))
                             )
                           }
-                          placeholder="Roll number"
+                          placeholder="Class roll number"
                           inputMode="numeric"
                           pattern="[0-9]+"
                           title="Digits only"
@@ -718,6 +718,15 @@ export default function StudentQuizPage() {
                     </div>
                   </>
                 )}
+                {/*
+                  Your marks are gathered under your roll number across every
+                  test of the semester, so a student who switches between their
+                  class roll and their university one splits their own record.
+                */}
+                <p className="text-xs" style={{ color: theme.muted }}>
+                  Use your <strong>class roll number</strong> — not your university registration number — and the same
+                  one in every test, so all your marks stay together.
+                </p>
                 {startError && <p className="text-sm text-red-600">{startError}</p>}
                 <button type="submit" disabled={starting} className="w-full rounded-lg py-3 font-semibold disabled:opacity-50" style={accentBtn}>
                   {starting ? "Starting…" : "Start quiz"}

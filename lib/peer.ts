@@ -3,6 +3,7 @@
  * https://github.com/ourbee
  */
 
+import { hashSeed } from "./normalize.ts";
 import { isChoice } from "./questions.ts";
 import type { Question } from "./types";
 
@@ -186,6 +187,81 @@ export function aggregateScores(totals: number[], mode: "mean" | "median"): numb
         : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
       : totals.reduce((s, t) => s + t, 0) / totals.length;
   return Math.round(value * 100) / 100;
+}
+
+export interface CriterionAverage {
+  id: string;
+  label: string;
+  max: number;
+  /** Mean of what the reviewers awarded, or null when none of them scored it. */
+  average: number | null;
+}
+
+export interface QuestionFeedback {
+  questionId: string;
+  criteria: CriterionAverage[];
+  subtotal: number | null;
+  subtotalMax: number;
+  comments: string[];
+}
+
+export interface FeedbackReview {
+  id: string;
+  scores: ReviewScores | null;
+  comments: Record<string, string> | null;
+}
+
+/**
+ * What a student is shown about their own work once marking is released: for
+ * each question, the criterion-by-criterion average and every comment left on
+ * it.
+ *
+ * The averages are means even when the quiz aggregates totals by median. A
+ * median of one criterion across three reviewers is a strange thing to put in
+ * front of a student, and the headline mark stays the authority either way —
+ * the page says so where the two can differ.
+ *
+ * Comments are ordered by a hash of the review and the question, which is
+ * stable from one visit to the next but uncorrelated between questions. So a
+ * student cannot follow "the first comment" down the page and reassemble one
+ * reviewer's voice — which, in a small class, is most of the way to a name.
+ */
+export function feedbackByQuestion(
+  reviews: FeedbackReview[],
+  criteria: PeerCriterion[],
+  questionIds: string[]
+): QuestionFeedback[] {
+  return questionIds.map((qid) => {
+    const perCriterion = criteria.map((c) => {
+      const awarded = reviews
+        .map((r) => Number(r.scores?.[qid]?.[c.id]))
+        .filter((n) => Number.isFinite(n))
+        .map((n) => Math.min(c.max, Math.max(0, n)));
+      const average = awarded.length
+        ? Math.round((awarded.reduce((s, n) => s + n, 0) / awarded.length) * 100) / 100
+        : null;
+      return { id: c.id, label: c.label, max: c.max, average };
+    });
+
+    const scored = perCriterion.filter((c) => c.average !== null);
+    const comments = reviews
+      // The question leads the seed: the hash runs left to right, so a suffix
+      // that changes cannot reshuffle an order the prefix has already settled.
+      .map((r) => ({ text: ((r.comments ?? {})[qid] ?? "").trim(), order: hashSeed(`${qid}:${r.id}`) }))
+      .filter((c) => c.text)
+      .sort((a, b) => a.order - b.order)
+      .map((c) => c.text);
+
+    return {
+      questionId: qid,
+      criteria: perCriterion,
+      subtotal: scored.length
+        ? Math.round(scored.reduce((s, c) => s + (c.average ?? 0), 0) * 100) / 100
+        : null,
+      subtotalMax: criteria.reduce((s, c) => s + c.max, 0),
+      comments,
+    };
+  });
 }
 
 /**

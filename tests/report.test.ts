@@ -10,7 +10,9 @@ import {
   bandFor,
   bandRange,
   buildReport,
+  canonicalRoll,
   normalizeBands,
+  suspectPairs,
   type Band,
   type ReportAttempt,
   type ReportOptions,
@@ -265,4 +267,67 @@ test("attempts from quizzes outside the selection are ignored", () => {
   const report = buildReport([quizzes[0]], attempts, opts());
   assert.equal(report.students[0].attempted, 1);
   assert.equal(report.students[0].percent, 90);
+});
+
+// ---------------- one student, two roll numbers ----------------
+
+test("a confirmed merge joins two roll numbers into one student row", () => {
+  const attempts = [
+    individual("q1", "Ananya Sen", "101", 3, 8, 10),
+    individual("q2", "Ananya Sen", "BWU1234", 3, 6, 10),
+  ];
+  const split = buildReport(quizzes, attempts, opts());
+  assert.equal(split.students.length, 2, "without a merge she is two half-students");
+
+  const joined = buildReport(quizzes, attempts, opts({ aliases: { BWU1234: "101" } }));
+  assert.equal(joined.students.length, 1);
+  const her = joined.students[0];
+  assert.equal(her.roll, "101");
+  assert.equal(her.attempted, 2, "both quizzes now count towards her average");
+  assert.equal(her.percent, 70);
+});
+
+test("merges chain, so the order a teacher clicks them in does not matter", () => {
+  assert.equal(canonicalRoll("C", { C: "B", B: "A" }), "A");
+  assert.equal(canonicalRoll("A", { C: "B", B: "A" }), "A");
+  assert.equal(canonicalRoll("A", { A: "B", B: "A" }), "B", "a loop stops instead of hanging");
+});
+
+test("a suspect pair is one name, one semester, and never the same quiz", () => {
+  const attempts = [
+    individual("q1", "Ananya Sen", "101", 3, 8, 10),
+    individual("q2", "ananya  sen", "BWU1234", 3, 6, 10),
+  ];
+  const [pair] = suspectPairs(attempts);
+  assert.equal(pair.keep, "101");
+  assert.equal(pair.merge, "BWU1234");
+  assert.equal(pair.semester, 3);
+  assert.equal(pair.keepQuizzes, 1);
+});
+
+test("two students who really share a name are never suggested for merging", () => {
+  // Both sat q1, so they cannot be the same person however alike the names look.
+  const attempts = [
+    individual("q1", "Ananya Sen", "101", 3, 8, 10),
+    individual("q1", "Ananya Sen", "102", 3, 6, 10),
+    individual("q2", "Ananya Sen", "101", 3, 7, 10),
+  ];
+  assert.deepEqual(suspectPairs(attempts), []);
+});
+
+test("the same name in different semesters is left alone", () => {
+  const attempts = [
+    individual("q1", "Ananya Sen", "101", 3, 8, 10),
+    individual("q2", "Ananya Sen", "205", 5, 6, 10),
+  ];
+  assert.deepEqual(suspectPairs(attempts), []);
+});
+
+test("a pair already merged drops off the suggestions", () => {
+  const attempts = [
+    individual("q1", "Ananya Sen", "101", 3, 8, 10),
+    individual("q2", "Ananya Sen", "BWU1234", 3, 6, 10),
+  ];
+  assert.equal(suspectPairs(attempts).length, 1);
+  assert.deepEqual(suspectPairs(attempts, { BWU1234: "101" }), []);
 });

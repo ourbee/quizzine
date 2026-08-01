@@ -7,6 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   aggregateScores,
+  feedbackByQuestion,
   normalizePeerConfig,
   outlierGap,
   peerMaxScore,
@@ -179,6 +180,52 @@ test("an empty criteria list falls back to the defaults rather than a zero-mark 
   const cfg = normalizePeerConfig({ criteria: [] });
   assert.ok(cfg.criteria.length > 0);
   assert.ok(peerMaxScore(cfg.criteria, 1) > 0);
+});
+
+// ---------------- what a student is shown afterwards ----------------
+
+test("feedback averages each criterion and gathers the comments per question", () => {
+  const reviews = [
+    { id: "r1", scores: { q1: { c1: 5, c2: 3 }, q2: { c1: 2, c2: 2 } }, comments: { q1: "Sharp opening.", q2: "" } },
+    { id: "r2", scores: { q1: { c1: 4, c2: 4 }, q2: { c1: 3, c2: 1 } }, comments: { q1: "  Needs evidence. ", q2: "Rushed." } },
+  ];
+  const [q1, q2] = feedbackByQuestion(reviews, criteria, ["q1", "q2"]);
+
+  assert.deepEqual(q1.criteria.map((c) => c.average), [4.5, 3.5]);
+  assert.equal(q1.subtotal, 8);
+  assert.equal(q1.subtotalMax, 10);
+  assert.equal(q1.comments.length, 2, "both reviewers commented on q1");
+  assert.ok(q1.comments.includes("Needs evidence."), "comments are trimmed");
+  assert.deepEqual(q2.comments, ["Rushed."], "an empty comment is not shown as a blank card");
+  assert.equal(q2.subtotal, 4);
+});
+
+test("feedback leaves a criterion nobody scored empty rather than calling it zero", () => {
+  const [only] = feedbackByQuestion(
+    [{ id: "r1", scores: { q1: { c1: 3 } }, comments: null }],
+    criteria,
+    ["q1"]
+  );
+  assert.equal(only.criteria[0].average, 3);
+  assert.equal(only.criteria[1].average, null, "Clarity was never scored");
+  assert.equal(only.subtotal, 3, "the subtotal counts only what was actually marked");
+});
+
+test("comments sit in a different order on each question, but the same order every visit", () => {
+  const reviews = Array.from({ length: 6 }, (_, i) => ({
+    id: `r${i}`,
+    scores: {},
+    comments: Object.fromEntries(["q1", "q2"].map((qid) => [qid, `${i}`])),
+  }));
+  const qids = ["q1", "q2"];
+  const first = feedbackByQuestion(reviews, criteria, qids);
+  const second = feedbackByQuestion(reviews, criteria, qids);
+  assert.deepEqual(first[0].comments, second[0].comments, "stable across visits");
+  assert.notDeepEqual(
+    first[0].comments,
+    first[1].comments,
+    "otherwise a student could follow one reviewer down the page"
+  );
 });
 
 // ---------------- end-to-end scoring shape ----------------

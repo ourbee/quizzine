@@ -8,7 +8,33 @@
 // are only ever displayed, never used to match a student across quizzes, since
 // students capitalise and space them differently from one test to the next.
 
+import { normName } from "./normalize.ts";
 import type { AttemptFlags, GroupInfo, StudentInfo } from "./types";
+
+/**
+ * A teacher's confirmed roll-number merges: variant roll -> canonical roll.
+ * Students write their class roll on one test and their university roll on the
+ * next, which would otherwise split one student's semester into two half-rows.
+ */
+export type AliasMap = Record<string, string>;
+
+/**
+ * Follow a variant to the roll it finally belongs to. Merges chain — B was
+ * merged into A, then C into B — and a teacher clicking merges in an unlucky
+ * order can close the chain into a loop, so the walk is bounded.
+ */
+export function canonicalRoll(roll: string, aliases: AliasMap): string {
+  let current = roll;
+  const seen = new Set([current]);
+  for (;;) {
+    const next = aliases[current];
+    // A closed loop has no true canonical roll, so stop at the last new one
+    // rather than circling. Saving a merge refuses to create one of these.
+    if (!next || seen.has(next)) return current;
+    seen.add(next);
+    current = next;
+  }
+}
 
 export interface Band {
   label: string;
@@ -108,6 +134,8 @@ export interface ReportOptions {
   bands: Band[];
   /** Restrict to one semester, or report on all of them. */
   semester: number | "all";
+  /** Roll numbers the teacher has confirmed belong to the same student. */
+  aliases?: AliasMap;
 }
 
 export const DEFAULT_OPTIONS: Omit<ReportOptions, "bands"> = {
@@ -181,15 +209,18 @@ function attemptPercent(a: ReportAttempt): number {
 }
 
 /** Everyone an attempt should be credited to — the group's whole team, or one student. */
-function participants(a: ReportAttempt): { roll: string; name: string; semester: number }[] {
-  if (a.group_info) {
-    return a.group_info.members.map((m) => ({
-      roll: m.roll,
-      name: m.name,
-      semester: a.group_info!.semester,
-    }));
-  }
-  return [{ roll: a.student.rollNorm, name: a.student.name, semester: a.student.semester }];
+function participants(
+  a: ReportAttempt,
+  aliases: AliasMap = {}
+): { roll: string; name: string; semester: number }[] {
+  const rows = a.group_info
+    ? a.group_info.members.map((m) => ({
+        roll: m.roll,
+        name: m.name,
+        semester: a.group_info!.semester,
+      }))
+    : [{ roll: a.student.rollNorm, name: a.student.name, semester: a.student.semester }];
+  return rows.map((r) => ({ ...r, roll: canonicalRoll(r.roll, aliases) }));
 }
 
 function pickMode(values: number[]): number {
@@ -211,6 +242,79 @@ function median(values: number[]): number {
   const s = [...values].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+export interface SuspectPair {
+  /** The roll with more attempts behind it — the one worth keeping. */
+  keep: string;
+  /** The roll that would be folded into it. */
+  merge: string;
+  /** How the student spelt their name under each roll. */
+  name: string;
+  semester: number;
+  keepQuizzes: number;
+  mergeQuizzes: number;
+}
+
+/**
+ * Two roll numbers that are probably one student: the same name, in the same
+ * semester, and never both present on the same quiz. That last condition is
+ * what makes this safe to suggest — genuine namesakes in a class sit the same
+ * tests, so they appear side by side and are never proposed for merging.
+ *
+ * Suggestions only. Nothing is merged until the teacher confirms it.
+ */
+export function suspectPairs(attempts: ReportAttempt[], aliases: AliasMap = {}): SuspectPair[] {
+  interface Seen {
+    roll: string;
+    name: string;
+    semester: number;
+    quizzes: Set<string>;
+  }
+  // Keyed by name + semester + roll, so one student's variants sit together.
+  const seen = new Map<string, Seen>();
+  for (const a of attempts) {
+    for (const p of participants(a, aliases)) {
+      if (!p.roll) continue;
+      const key = `${normName(p.name)}|${p.semester}|${p.roll}`;
+      let entry = seen.get(key);
+      if (!entry) {
+        entry = { roll: p.roll, name: normName(p.name), semester: p.semester, quizzes: new Set() };
+        seen.set(key, entry);
+      }
+      entry.quizzes.add(a.quiz_id);
+    }
+  }
+
+  const byName = new Map<string, Seen[]>();
+  for (const entry of seen.values()) {
+    const key = `${entry.name}|${entry.semester}`;
+    byName.set(key, [...(byName.get(key) ?? []), entry]);
+  }
+
+  const pairs: SuspectPair[] = [];
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    // Most-seen roll first: that is the one the semester's record already hangs on.
+    const sorted = [...group].sort((x, y) => y.quizzes.size - x.quizzes.size || x.roll.localeCompare(y.roll));
+    for (let i = 0; i < sorted.length; i++) {
+      for (let j = i + 1; j < sorted.length; j++) {
+        const keep = sorted[i];
+        const merge = sorted[j];
+        const overlap = [...merge.quizzes].some((id) => keep.quizzes.has(id));
+        if (overlap) continue; // both sat the same quiz, so they are two people
+        pairs.push({
+          keep: keep.roll,
+          merge: merge.roll,
+          name: keep.name,
+          semester: keep.semester,
+          keepQuizzes: keep.quizzes.size,
+          mergeQuizzes: merge.quizzes.size,
+        });
+      }
+    }
+  }
+  return pairs.sort((a, b) => a.name.localeCompare(b.name) || a.merge.localeCompare(b.merge));
 }
 
 export function buildReport(
@@ -244,7 +348,7 @@ export function buildReport(
   for (const a of relevant) {
     const at = new Date(a.submitted_at).getTime() || 0;
     const percent = attemptPercent(a);
-    for (const p of participants(a)) {
+    for (const p of participants(a, options.aliases)) {
       if (!p.roll) continue;
       let entry = acc.get(p.roll);
       if (!entry) {

@@ -17,6 +17,8 @@ import {
   bandRange,
   buildReport,
   normalizeBands,
+  suspectPairs,
+  type AliasMap,
   type Band,
   type BandColor,
   type BandScheme,
@@ -88,6 +90,9 @@ export default function ReportsPage() {
   const [editingBands, setEditingBands] = useState(false);
   const [savingBands, setSavingBands] = useState(false);
 
+  const [aliases, setAliases] = useState<AliasMap>({});
+  const [aliasBusy, setAliasBusy] = useState("");
+
   // Quiz list + saved band schemes.
   useEffect(() => {
     (async () => {
@@ -108,6 +113,9 @@ export default function ReportsPage() {
         /* ignore a corrupt selection */
       }
       setRestored(true);
+
+      const aliasRes = await fetch("/api/aliases");
+      if (aliasRes.ok) setAliases((await aliasRes.json()).aliases ?? {});
 
       const bandRes = await fetch("/api/bands");
       if (bandRes.ok) {
@@ -166,8 +174,34 @@ export default function ReportsPage() {
 
   const report = useMemo(() => {
     if (!source) return null;
-    return buildReport(source.quizzes, source.attempts, { weighting, missing, repeats, bands, semester });
-  }, [source, weighting, missing, repeats, bands, semester]);
+    return buildReport(source.quizzes, source.attempts, { weighting, missing, repeats, bands, semester, aliases });
+  }, [source, weighting, missing, repeats, bands, semester, aliases]);
+
+  // One student under two roll numbers. Merges already confirmed are applied
+  // first, so a pair only stays on the list until the teacher deals with it.
+  const suspects = useMemo(
+    () => (source ? suspectPairs(source.attempts, aliases) : []),
+    [source, aliases]
+  );
+  const mergedPairs = useMemo(() => Object.entries(aliases), [aliases]);
+
+  const mergeRolls = useCallback(async (merge: string, keep: string) => {
+    setAliasBusy(merge);
+    const res = await fetch("/api/aliases", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ merge, keep }),
+    });
+    setAliasBusy("");
+    if (res.ok) setAliases((await res.json()).aliases ?? {});
+  }, []);
+
+  const unmergeRoll = useCallback(async (variant: string) => {
+    setAliasBusy(variant);
+    const res = await fetch(`/api/aliases?variant=${encodeURIComponent(variant)}`, { method: "DELETE" });
+    setAliasBusy("");
+    if (res.ok) setAliases((await res.json()).aliases ?? {});
+  }, []);
 
   const nameClashes = useMemo(
     () => (report?.students ?? []).filter((s) => s.nameVariants.length > 1),
@@ -765,6 +799,66 @@ export default function ReportsPage() {
                   </table>
                 </div>
               </section>
+
+              {(suspects.length > 0 || mergedPairs.length > 0) && (
+                <section className="mt-6 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+                  <p className="font-semibold text-slate-900">Roll numbers</p>
+                  <p className="mt-1 text-slate-500">
+                    A student who writes their class roll on one test and their university roll on the next appears
+                    twice here, with half their work under each. Merging joins them in every report from now on. The
+                    responses themselves are never changed, so you can undo this at any time.
+                  </p>
+
+                  {suspects.length > 0 && (
+                    <ul className="mt-3 space-y-2">
+                      {suspects.map((p) => (
+                        <li
+                          key={`${p.keep}-${p.merge}`}
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2"
+                        >
+                          <span className="text-slate-700">
+                            <span className="font-semibold">{p.name}</span> · {semLabel(p.semester, false)} — roll{" "}
+                            <span className="font-mono font-semibold">{p.keep}</span> on {p.keepQuizzes} quiz
+                            {p.keepQuizzes === 1 ? "" : "zes"} and{" "}
+                            <span className="font-mono font-semibold">{p.merge}</span> on {p.mergeQuizzes}, never on
+                            the same one.
+                          </span>
+                          <button
+                            onClick={() => mergeRolls(p.merge, p.keep)}
+                            disabled={aliasBusy === p.merge}
+                            className="shrink-0 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                          >
+                            {aliasBusy === p.merge ? "Merging…" : `Same student — use ${p.keep}`}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {mergedPairs.length > 0 && (
+                    <div className="mt-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Merged</p>
+                      <ul className="mt-1.5 space-y-1.5">
+                        {mergedPairs.map(([variant, canonical]) => (
+                          <li key={variant} className="flex flex-wrap items-center justify-between gap-3">
+                            <span className="text-slate-600">
+                              <span className="font-mono">{variant}</span> counts as{" "}
+                              <span className="font-mono font-semibold">{canonical}</span>
+                            </span>
+                            <button
+                              onClick={() => unmergeRoll(variant)}
+                              disabled={aliasBusy === variant}
+                              className="text-xs font-semibold text-slate-500 underline disabled:opacity-50"
+                            >
+                              {aliasBusy === variant ? "Undoing…" : "Undo"}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </section>
+              )}
 
               {(nameClashes.length > 0 || semesterMovers.length > 0) && (
                 <section className="mt-6 rounded-xl border border-amber-200 bg-amber-50/60 p-4 text-sm">

@@ -9,8 +9,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { getTheme } from "@/lib/themes";
 import { NO_SEMESTER, SEMESTER_CHOICES } from "@/lib/normalize";
-import type { PeerCriterion } from "@/lib/peer";
+import type { PeerCriterion, QuestionFeedback } from "@/lib/peer";
 import type { ReviewPayload } from "@/lib/types";
+
+interface Feedback {
+  total: number | null;
+  max: number;
+  rubricMax: number;
+  peerScore: number | null;
+  reviewCredit: number;
+  reviewPoints: number;
+  reviewerCount: number;
+  teacherSet: boolean;
+  aggregate: "mean" | "median";
+  questions: (QuestionFeedback & { answer: string })[];
+}
 
 interface Task {
   reviewId: string;
@@ -36,7 +49,7 @@ interface Session {
   commentRequired: boolean;
   questions: ReviewQuestion[];
   tasks: Task[];
-  feedback: { total: number | null; max: number; comments: string[] } | null;
+  feedback: Feedback | null;
 }
 
 export default function PeerReviewPage() {
@@ -51,6 +64,8 @@ export default function PeerReviewPage() {
   const [comments, setComments] = useState<Record<string, string>>({});
   const [saveError, setSaveError] = useState("");
   const [justSaved, setJustSaved] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkedAt, setCheckedAt] = useState(0);
   const attempted = useRef(false);
 
   const theme = getTheme(session?.theme ?? "slate");
@@ -137,6 +152,14 @@ export default function PeerReviewPage() {
     open(roll, semester);
   }
 
+  /** Ask again whether the teacher has released results, without a page reload. */
+  async function checkResults() {
+    setChecking(true);
+    await open(roll, semester, true);
+    setChecking(false);
+    setCheckedAt(Date.now());
+  }
+
   async function submitReview() {
     if (!session || !task) return;
     setBusy(true);
@@ -213,36 +236,113 @@ export default function PeerReviewPage() {
   // ---------------- results released ----------------
   if (session.phase === "closed") {
     const fb = session.feedback;
+    const byId = new Map(session.questions.map((qn) => [qn.id, qn]));
+    // The breakdown is an average per criterion; a median-aggregated quiz takes
+    // the middle reviewer's total instead, which these need not add up to.
+    const breakdownDiffers = !!fb && fb.aggregate === "median" && fb.reviewerCount > 1;
     return (
       <div style={pageStyle} className="flex-1 px-4 py-10">
         <main className="mx-auto max-w-2xl space-y-4">
-          <div className="rounded-2xl border p-6 text-center shadow-sm" style={cardStyle}>
+          <div className="rounded-2xl border p-6 text-center shadow-sm print-page" style={cardStyle}>
             <p className="text-sm font-medium" style={{ color: theme.muted }}>{session.quizTitle}</p>
-            <h1 className="mt-1 text-xl font-bold">Peer review is finished</h1>
+            <h1 className="mt-1 text-xl font-bold">Peer review is complete</h1>
             {fb && fb.total !== null ? (
-              <p className="mt-4 text-5xl font-bold" style={{ color: theme.accent }}>
-                {fb.total}
-                <span className="text-2xl font-semibold" style={{ color: theme.muted }}> / {fb.max}</span>
-              </p>
+              <>
+                <p className="mt-3 text-sm" style={{ color: theme.muted }}>Your score is</p>
+                <p className="text-5xl font-bold" style={{ color: theme.accent }}>
+                  {fb.total}
+                  <span className="text-2xl font-semibold" style={{ color: theme.muted }}> / {fb.max}</span>
+                </p>
+                <p className="mt-2 text-sm" style={{ color: theme.muted }}>
+                  {fb.teacherSet
+                    ? "Your teacher set this mark themselves."
+                    : `Marked by ${fb.reviewerCount} classmate${fb.reviewerCount === 1 ? "" : "s"}.`}
+                  {!fb.teacherSet && fb.reviewPoints > 0 &&
+                    ` Includes ${fb.reviewCredit} of ${fb.reviewPoints} mark${fb.reviewPoints === 1 ? "" : "s"} for completing your own reviews.`}
+                </p>
+              </>
             ) : (
               <p className="mt-4 text-sm" style={{ color: theme.muted }}>Your mark has not been released.</p>
             )}
+            <button onClick={() => window.print()} className="no-print mt-4 rounded-lg px-5 py-2.5 font-semibold" style={accentBtn}>
+              Print / save your feedback
+            </button>
           </div>
-          {fb && fb.comments.length > 0 && (
-            <div className="rounded-2xl border p-5 shadow-sm" style={cardStyle}>
-              <h2 className="font-semibold">What your classmates said</h2>
-              <p className="mt-1 text-xs" style={{ color: theme.muted }}>
-                Comments are shown without names and in no particular order.
-              </p>
-              <ul className="mt-3 space-y-2 text-sm">
-                {fb.comments.map((c, i) => (
-                  <li key={i} className="rounded-lg border p-3 whitespace-pre-wrap" style={{ borderColor: theme.border }}>
-                    {c}
-                  </li>
-                ))}
-              </ul>
-            </div>
+
+          {fb?.questions.map((f, i) => {
+            const qn = byId.get(f.questionId);
+            if (!qn) return null;
+            return (
+              <div key={f.questionId} className="rounded-2xl border p-5 shadow-sm print-page" style={cardStyle}>
+                <p className="text-xs font-semibold" style={{ color: theme.muted }}>
+                  Question {i + 1} of {fb.questions.length}
+                </p>
+                {qn.passage && (
+                  <p className="mt-2 whitespace-pre-wrap rounded-lg border p-3 text-sm" style={{ borderColor: theme.border, color: theme.muted }}>
+                    {qn.passage}
+                  </p>
+                )}
+                <p className="mt-2 font-medium">{qn.text}</p>
+
+                <p className="mt-4 text-xs font-semibold" style={{ color: theme.muted }}>Your response</p>
+                <div className="mt-1 whitespace-pre-wrap rounded-lg border p-3 text-sm" style={{ borderColor: theme.border }}>
+                  {f.answer.trim() || <span style={{ color: theme.muted }}>You left this blank.</span>}
+                </div>
+
+                <p className="mt-4 text-xs font-semibold" style={{ color: theme.muted }}>
+                  {f.comments.length === 1 ? "Your reviewer’s comment" : "Your reviewers’ comments"}
+                </p>
+                {f.comments.length ? (
+                  <ul className="mt-1 space-y-2 text-sm">
+                    {f.comments.map((c, ci) => (
+                      <li key={ci} className="whitespace-pre-wrap rounded-lg border p-3" style={{ borderColor: theme.border, background: theme.accentSoft }}>
+                        {c}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-sm" style={{ color: theme.muted }}>Nobody left a comment on this one.</p>
+                )}
+
+                <p className="mt-4 text-xs font-semibold" style={{ color: theme.muted }}>Score breakdown</p>
+                <div className="mt-1 rounded-lg border" style={{ borderColor: theme.border }}>
+                  {f.criteria.map((c) => (
+                    <div key={c.id} className="flex items-baseline justify-between border-b px-3 py-2 text-sm last:border-b-0" style={{ borderColor: theme.border }}>
+                      <span>{c.label}</span>
+                      <span className="font-semibold">
+                        {c.average === null ? "—" : c.average} <span className="font-normal" style={{ color: theme.muted }}>/ {c.max}</span>
+                      </span>
+                    </div>
+                  ))}
+                  <div className="flex items-baseline justify-between px-3 py-2 text-sm font-semibold" style={{ background: theme.accentSoft }}>
+                    <span>This question</span>
+                    <span>
+                      {f.subtotal === null ? "—" : f.subtotal} <span className="font-normal" style={{ color: theme.muted }}>/ {f.subtotalMax}</span>
+                    </span>
+                  </div>
+                </div>
+                {fb.reviewerCount > 1 && (
+                  <p className="mt-1.5 text-xs" style={{ color: theme.muted }}>
+                    Averaged across your {fb.reviewerCount} reviewers.
+                  </p>
+                )}
+              </div>
+            );
+          })}
+
+          {breakdownDiffers && (
+            <p className="text-xs" style={{ color: theme.muted }}>
+              Your final mark is the middle reviewer’s total rather than an average, so it may not match the sum of the
+              figures above.
+            </p>
           )}
+
+          <div className="no-print rounded-2xl border p-5 text-center shadow-sm" style={cardStyle}>
+            <p className="text-sm" style={{ color: theme.muted }}>Keep a copy of this feedback for your records.</p>
+            <button onClick={() => window.print()} className="mt-3 rounded-lg px-6 py-2.5 font-semibold" style={accentBtn}>
+              Print / save your feedback
+            </button>
+          </div>
         </main>
       </div>
     );
@@ -298,9 +398,30 @@ export default function PeerReviewPage() {
           </div>
         )}
 
+        {/*
+          Their marking is done, so the only thing left is their own result — and
+          that waits on the teacher, not on their reviewers. A button to ask again
+          beats telling a student to reload a page they are already sitting on.
+        */}
         {allDone && session.tasks.length > 0 && session.questions.length > 0 && (
-          <div className="rounded-2xl border-2 p-4 text-sm" style={{ borderColor: theme.accent, background: theme.accentSoft }}>
-            All your reviews are in — thank you. You can still revise any of them until your teacher closes the quiz.
+          <div className="rounded-2xl border-2 p-5" style={{ borderColor: theme.accent, background: theme.accentSoft }}>
+            <h2 className="font-bold">All your reviews are in — thank you</h2>
+            <p className="mt-1 text-sm" style={{ color: theme.muted }}>
+              Waiting for your teacher to release results. You can still revise any of your reviews below until then.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                onClick={checkResults}
+                disabled={checking}
+                className="rounded-lg px-5 py-2.5 font-semibold disabled:opacity-50"
+                style={accentBtn}
+              >
+                {checking ? "Checking…" : "Check if my results are ready"}
+              </button>
+              {!!checkedAt && !checking && (
+                <span className="text-sm" style={{ color: theme.muted }}>Not released yet — try again later.</span>
+              )}
+            </div>
           </div>
         )}
 

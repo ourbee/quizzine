@@ -6,9 +6,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { normRoll, readSemester } from "@/lib/normalize";
-import { normalizePeerConfig, reviewableQuestions } from "@/lib/peer";
+import { feedbackByQuestion, normalizePeerConfig, reviewableQuestions, type QuestionFeedback } from "@/lib/peer";
 import { listReviews, summarisePeer, listSubmittedAttempts, type PeerReviewRow } from "@/lib/peerdb";
 import type { GroupInfo, Question, QuizSettings, StudentInfo } from "@/lib/types";
+
+interface Feedback {
+  /** What finally counts, including any review credit or teacher override. */
+  total: number | null;
+  max: number;
+  /** Marks the rubric alone can award, before review credit. */
+  rubricMax: number;
+  peerScore: number | null;
+  reviewCredit: number;
+  reviewPoints: number;
+  reviewerCount: number;
+  teacherSet: boolean;
+  aggregate: "mean" | "median";
+  questions: (QuestionFeedback & { answer: string })[];
+}
 
 /**
  * A student returning to a quiz that has moved into its reviewing phase. They
@@ -41,10 +56,12 @@ export async function POST(req: NextRequest) {
   }
 
   const config = normalizePeerConfig(quiz.settings.peer);
-  const attempts = await q<{ id: string; student: StudentInfo; group_info: GroupInfo | null }>(
-    `SELECT id, student, group_info FROM attempts WHERE quiz_id = $1 AND status = 'submitted'`,
-    [quiz.id]
-  );
+  const attempts = await q<{
+    id: string;
+    student: StudentInfo;
+    group_info: GroupInfo | null;
+    answers: Record<string, string> | null;
+  }>(`SELECT id, student, group_info, answers FROM attempts WHERE quiz_id = $1 AND status = 'submitted'`, [quiz.id]);
 
   // A group submission belongs to every member, so any of their roll numbers finds it.
   const mine = attempts.find((a) =>
@@ -82,21 +99,33 @@ export async function POST(req: NextRequest) {
     answers: Object.fromEntries(questions.map((qn) => [qn.id, answersById.get(r.attempt_id)?.[qn.id] ?? ""])),
   }));
 
-  // Once the teacher closes the quiz, the student may read what the panel said of their own work.
-  let feedback: { total: number | null; max: number; comments: string[] } | null = null;
+  // Once the teacher closes the quiz, the student may read what the panel said of
+  // their own work: question by question, their own answer beside the comments it
+  // drew and the marks each criterion was given.
+  let feedback: Feedback | null = null;
   if (phase === "closed" && config.releaseFeedback) {
     const all = await listSubmittedAttempts(quiz.id);
-    const { outcomes, max } = summarisePeer(quiz.questions, all, allReviews, config);
+    const { outcomes, max, rubricMax } = summarisePeer(quiz.questions, all, allReviews, config);
     const own = outcomes.find((o) => o.attemptId === mine.id);
     const onMe = allReviews.filter((r) => r.attempt_id === mine.id && r.status === "submitted");
+    const perQuestion = feedbackByQuestion(
+      onMe.map((r) => ({ id: r.id, scores: r.scores, comments: r.comments })),
+      config.criteria,
+      questions.map((qn) => qn.id)
+    );
     feedback = {
       total: own ? own.finalScore : null,
       max,
-      // Detached from their authors and from each other, so no reviewer can be identified.
-      comments: onMe
-        .flatMap((r) => questions.map((qn) => (r.comments ?? {})[qn.id] ?? ""))
-        .map((c) => c.trim())
-        .filter(Boolean),
+      rubricMax,
+      peerScore: own?.peerScore ?? null,
+      reviewCredit: own?.reviewCredit ?? 0,
+      reviewPoints: config.reviewPoints,
+      reviewerCount: onMe.length,
+      // A mark the teacher set by hand replaces the panel's, so say so rather
+      // than leave a student adding the breakdown up and finding it disagrees.
+      teacherSet: own?.teacherScore !== null && own?.teacherScore !== undefined,
+      aggregate: config.aggregate,
+      questions: perQuestion.map((f) => ({ ...f, answer: mine.answers?.[f.questionId] ?? "" })),
     };
   }
 

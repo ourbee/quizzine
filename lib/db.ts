@@ -64,6 +64,17 @@ CREATE TABLE IF NOT EXISTS peer_reviews (
   submitted_at timestamptz
 );
 CREATE UNIQUE INDEX IF NOT EXISTS peer_reviews_pair_idx ON peer_reviews(attempt_id, reviewer_attempt_id);
+
+-- One student, two roll numbers: a teacher confirms that a variant belongs to a
+-- canonical roll, and every later report treats them as one person. The attempts
+-- keep whatever was typed — only the reporting is merged.
+CREATE TABLE IF NOT EXISTS roll_aliases (
+  owner text NOT NULL,
+  variant_roll text NOT NULL,
+  canonical_roll text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner, variant_roll)
+);
 CREATE INDEX IF NOT EXISTS peer_reviews_quiz_idx ON peer_reviews(quiz_id);
 CREATE INDEX IF NOT EXISTS peer_reviews_reviewer_idx ON peer_reviews(reviewer_attempt_id);
 `;
