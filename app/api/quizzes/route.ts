@@ -59,15 +59,25 @@ export async function POST(req: NextRequest) {
   const groupMode = !!body.settings?.groupMode;
   const groupMin = groupMode ? Math.min(50, Math.max(1, Math.floor(Number(body.settings?.groupMin)) || 1)) : undefined;
   const groupMax = groupMode ? Math.min(50, Math.max(groupMin ?? 1, Math.floor(Number(body.settings?.groupMax)) || groupMin || 1)) : undefined;
+  const examMode = !!body.settings?.examMode;
+  // The exam interface lets a student roam the paper by its palette, which the
+  // per-question timer exists to forbid. Exam mode wins; the teacher form offers
+  // the same two timers it leaves standing.
+  const rawTimerMode = ["none", "quiz", "question"].includes(body.settings?.timerMode) ? body.settings.timerMode : "none";
+  const timerMode = examMode && rawTimerMode === "question" ? "none" : rawTimerMode;
   const settings: QuizSettings = {
     shuffleQuestions: !!body.settings?.shuffleQuestions,
     shuffleOptions: !!body.settings?.shuffleOptions,
     gradingMode: ["survey", "peer"].includes(body.settings?.gradingMode) ? body.settings.gradingMode : "graded",
     multiScoring: body.settings?.multiScoring === "partial" ? "partial" : "exact",
     peer: body.settings?.gradingMode === "peer" ? normalizePeerConfig(body.settings?.peer) : undefined,
-    timerMode: ["none", "quiz", "question"].includes(body.settings?.timerMode) ? body.settings.timerMode : "none",
+    timerMode,
     maxMinutes: Number(body.settings?.maxMinutes) > 0 ? Number(body.settings.maxMinutes) : undefined,
-    perQuestionSeconds: Number(body.settings?.perQuestionSeconds) > 0 ? Number(body.settings.perQuestionSeconds) : undefined,
+    perQuestionSeconds:
+      timerMode === "question" && Number(body.settings?.perQuestionSeconds) > 0
+        ? Number(body.settings.perQuestionSeconds)
+        : undefined,
+    examMode,
     closesAt: body.settings?.closesAt || undefined,
     allowMultiple: !!body.settings?.allowMultiple,
     groupMode,

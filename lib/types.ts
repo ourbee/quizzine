@@ -59,6 +59,13 @@ export interface QuizSettings {
   timerMode: TimerMode;
   maxMinutes?: number; // timerMode "quiz"
   perQuestionSeconds?: number; // timerMode "question"
+  /**
+   * Sit the student in a layout modelled on national-level competitive exams:
+   * one question at a time, a status palette, and answers that only count once
+   * saved. Absent means off, so every quiz saved before this behaves as it did.
+   * Never combined with timerMode "question" — see the note in lib/examstate.ts.
+   */
+  examMode?: boolean;
   closesAt?: string; // ISO datetime; stop accepting new starts
   allowMultiple: boolean;
   groupMode?: boolean; // one submission per group instead of per student

@@ -11,8 +11,18 @@ import { getTheme } from "@/lib/themes";
 import { hashSeed, NO_SEMESTER, SEMESTER_CHOICES, seededShuffle, semesterLabel } from "@/lib/normalize";
 import { correctKeysOf, groupByPassage, joinKeys, shuffleWithinPassageGroups, splitKeys } from "@/lib/questions";
 import type { ReviewPayload } from "@/lib/types";
+import {
+  emptyProgress,
+  examKey,
+  LEGEND_ORDER,
+  parseProgress,
+  serializeProgress,
+  STATUS_STYLES,
+  type ExamProgress,
+} from "@/lib/examstate";
 import Material from "@/components/Material";
 import Media from "@/components/Media";
+import ExamShell from "@/components/ExamShell";
 
 interface PublicOption { key: string; text: string }
 interface PublicQuestion {
@@ -36,6 +46,7 @@ interface PublicQuiz {
     maxMinutes?: number;
     perQuestionSeconds?: number;
     closesAt?: string;
+    examMode?: boolean;
     shuffleQuestions: boolean;
     shuffleOptions: boolean;
     allowMultiple: boolean;
@@ -57,6 +68,8 @@ interface ActiveAttempt {
   attemptId: string;
   deadlineAt?: number;
   index: number;
+  /** Shown in the exam header, which outlives the intro form a reload discards. */
+  candidate?: string;
 }
 
 function fmtClock(ms: number): string {
@@ -82,6 +95,8 @@ export default function StudentQuizPage() {
 
   const [attempt, setAttempt] = useState<ActiveAttempt | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  // Exam mode only: which questions have been landed on and which flagged.
+  const [progress, setProgress] = useState<ExamProgress>(emptyProgress);
   const [index, setIndex] = useState(0); // per-question mode
   const [now, setNow] = useState(Date.now());
   const [qDeadline, setQDeadline] = useState<number | null>(null); // per-question deadline
@@ -135,6 +150,7 @@ export default function StudentQuizPage() {
           setAttempt(active);
           setIndex(active.index ?? 0);
           if (savedAns) setAnswers(JSON.parse(savedAns));
+          setProgress(parseProgress(localStorage.getItem(examKey(active.attemptId))));
           setPhase("taking");
           return;
         } catch {}
@@ -194,8 +210,18 @@ export default function StudentQuizPage() {
     if (phase === "taking" && attempt) localStorage.setItem(activeKey, JSON.stringify({ ...attempt, index }));
   }, [attempt, index, phase, activeKey]);
 
+  // One key holds both sets, so a reload can never restore the flags without the
+  // visits that go with them.
+  useEffect(() => {
+    if (phase === "taking" && attempt) localStorage.setItem(examKey(attempt.attemptId), serializeProgress(progress));
+  }, [progress, attempt, phase]);
+
   const theme = getTheme(quiz?.theme ?? "slate");
-  const perQuestionMode = quiz?.settings.timerMode === "question" && !!quiz.settings.perQuestionSeconds;
+  const examMode = !!quiz?.settings.examMode;
+  // The per-question timer forbids going back, which is exactly what the exam
+  // palette is for; the two never travel together (enforced when the quiz is saved).
+  const perQuestionMode =
+    !examMode && quiz?.settings.timerMode === "question" && !!quiz.settings.perQuestionSeconds;
 
   const ordered = useMemo(() => {
     if (!quiz || !attempt) return quiz?.questions ?? [];
@@ -207,6 +233,15 @@ export default function StudentQuizPage() {
     }
     return qs;
   }, [quiz, attempt]);
+
+  // Landing on a question is what turns its palette tile from grey to red — the
+  // student has now seen it and chosen to leave it, which is different from
+  // never having reached it at all.
+  const currentQid = examMode ? ordered[index]?.id : undefined;
+  useEffect(() => {
+    if (phase !== "taking" || !currentQid) return;
+    setProgress((p) => (p.visited.has(currentQid) ? p : { ...p, visited: new Set(p.visited).add(currentQid) }));
+  }, [currentQid, phase]);
 
   // ------- per-question timer -------
   useEffect(() => {
@@ -236,6 +271,7 @@ export default function StudentQuizPage() {
       localStorage.setItem(reviewKey, JSON.stringify(data));
       localStorage.removeItem(activeKey);
       localStorage.removeItem(`qd-ans-${attempt.attemptId}`);
+      localStorage.removeItem(examKey(attempt.attemptId));
       setReview(data);
       setPhase("review");
     } catch (err) {
@@ -284,9 +320,11 @@ export default function StudentQuizPage() {
       attemptId: data.attemptId,
       deadlineAt: duration ? Date.now() + duration : undefined,
       index: 0,
+      candidate: quiz.settings.groupMode ? groupName.trim() : name.trim(),
     };
     setAttempt(active);
     setAnswers({});
+    setProgress(emptyProgress());
     setIndex(0);
     localStorage.setItem(activeKey, JSON.stringify(active));
     setPhase("taking");
@@ -584,6 +622,46 @@ export default function StudentQuizPage() {
               </li>
             </ul>
 
+            {/*
+              The interface is the thing being rehearsed, so it is explained
+              before the clock starts rather than discovered under it — above all
+              the rule that costs first-timers marks: a choice is not an answer
+              until it is saved.
+            */}
+            {examMode && quiz.phase === "responding" && !quiz.closed && (
+              <div className="mt-5 rounded-xl border-2 border-slate-300 bg-slate-50 p-4 text-slate-900">
+                <h2 className="text-sm font-bold uppercase tracking-wide">Exam interface — read before you start</h2>
+                <p className="mt-2 text-sm">
+                  This paper is presented one question at a time, in a layout modelled on national-level
+                  competitive examinations. You may move freely between questions using the palette.
+                </p>
+                <p className="mt-2 rounded-lg bg-amber-100 p-2.5 text-sm font-medium text-amber-900">
+                  Choosing an option does not record it. Press <strong>Save &amp; Next</strong> (or{" "}
+                  <strong>Save &amp; Mark for Review</strong>) or your choice is discarded when you leave the
+                  question — exactly as in the real examination.
+                </p>
+                <p className="mt-3 text-sm font-semibold">The palette shows every question as one of:</p>
+                <ul className="mt-2 space-y-1.5">
+                  {LEGEND_ORDER.map((s) => (
+                    <li key={s} className="flex items-center gap-2.5 text-sm">
+                      <span
+                        aria-hidden
+                        className={`inline-block h-4 w-4 shrink-0 border ${
+                          STATUS_STYLES[s].shape === "circle" ? "rounded-full" : "rounded-sm"
+                        }`}
+                        style={{ background: STATUS_STYLES[s].bg, borderColor: STATUS_STYLES[s].border }}
+                      />
+                      {STATUS_STYLES[s].label}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-3 text-sm">
+                  <strong>Mark for Review</strong> is a note to yourself — a flagged answer is marked no
+                  differently from any other. You will see a summary before your paper is submitted.
+                </p>
+              </div>
+            )}
+
             {quiz.phase !== "responding" ? (
               <div className="mt-6 rounded-lg p-4 text-sm" style={{ background: theme.accentSoft }}>
                 <p className="font-semibold">
@@ -823,6 +901,35 @@ export default function StudentQuizPage() {
       )}
     </div>
   );
+
+  // ------- exam interface -------
+  if (examMode) {
+    return (
+      <ExamShell
+        questions={ordered}
+        answers={answers}
+        progress={progress}
+        index={index}
+        remainingMs={overallRemaining}
+        candidate={attempt?.candidate || (quiz.settings.groupMode ? groupName : name)}
+        quizTitle={quiz.title}
+        subtitle={quiz.description}
+        submitting={submitting}
+        submitError={submitError}
+        onIndexChange={setIndex}
+        onSaveAnswer={(qid, answer) => setAnswers((a) => ({ ...a, [qid]: answer }))}
+        onSetMarked={(qid, marked) =>
+          setProgress((p) => {
+            const next = new Set(p.marked);
+            if (marked) next.add(qid);
+            else next.delete(qid);
+            return { ...p, marked: next };
+          })
+        }
+        onSubmit={submit}
+      />
+    );
+  }
 
   return (
     <div style={pageStyle} className="pb-12 flex-1">

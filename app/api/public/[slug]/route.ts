@@ -55,6 +55,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
       timerMode: settings.timerMode,
       maxMinutes: settings.maxMinutes,
       perQuestionSeconds: settings.perQuestionSeconds,
+      examMode: settings.examMode,
       closesAt: settings.closesAt,
       shuffleQuestions: settings.shuffleQuestions,
       shuffleOptions: settings.shuffleOptions,

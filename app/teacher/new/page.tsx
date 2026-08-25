@@ -172,6 +172,14 @@ export default function NewQuizPage() {
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
   const [shuffleOptions, setShuffleOptions] = useState(true);
   const [timerMode, setTimerMode] = useState<TimerMode>("none");
+  const [examMode, setExamMode] = useState(false);
+  /**
+   * The palette lets students roam the paper, which is precisely what the
+   * per-question countdown exists to prevent. Deriving the timer rather than
+   * resetting it on toggle means the two can never disagree — and a teacher who
+   * turns exam mode back off gets their countdown back untouched.
+   */
+  const effectiveTimerMode: TimerMode = examMode && timerMode === "question" ? "none" : timerMode;
   const [maxMinutes, setMaxMinutes] = useState("15");
   const [perQuestionSeconds, setPerQuestionSeconds] = useState("45");
   const [closesAt, setClosesAt] = useState("");
@@ -337,9 +345,10 @@ export default function NewQuizPage() {
       shuffleOptions,
       multiScoring,
       peer,
-      timerMode,
-      maxMinutes: timerMode === "quiz" ? Number(maxMinutes) : undefined,
-      perQuestionSeconds: timerMode === "question" ? Number(perQuestionSeconds) : undefined,
+      timerMode: effectiveTimerMode,
+      examMode,
+      maxMinutes: effectiveTimerMode === "quiz" ? Number(maxMinutes) : undefined,
+      perQuestionSeconds: effectiveTimerMode === "question" ? Number(perQuestionSeconds) : undefined,
       closesAt: closesAt ? new Date(closesAt).toISOString() : undefined,
       allowMultiple,
       groupMode,
@@ -1026,25 +1035,56 @@ export default function NewQuizPage() {
           )}
 
           <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+            <label className="flex items-start gap-2.5 text-sm">
+              <input
+                type="checkbox"
+                checked={examMode}
+                onChange={(e) => setExamMode(e.target.checked)}
+                className="mt-0.5 w-4 h-4"
+              />
+              <span>
+                <span className="font-semibold text-slate-900">Exam Interface mode</span>
+                <span className="mt-1 block text-xs text-slate-500">
+                  Students see one question at a time in a layout modelled on national-level competitive
+                  examinations — a question palette showing what is answered, skipped or flagged, plus Save
+                  &amp; Next and Mark for Review controls. Answers count only once saved, as in the real
+                  thing. Use it to let students rehearse the interface itself, not just the questions.
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
             <p className="font-semibold text-slate-900 text-sm">Timer</p>
             <div className="flex flex-wrap gap-2 text-sm">
-              {([["none", "No timer"], ["quiz", "Whole-quiz limit"], ["question", "Per-question countdown"]] as [TimerMode, string][]).map(([mode, label]) => (
-                <button
-                  key={mode}
-                  onClick={() => setTimerMode(mode)}
-                  className={`rounded-lg px-4 py-2 font-medium ${timerMode === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
-                >
-                  {label}
-                </button>
-              ))}
+              {([["none", "No timer"], ["quiz", "Whole-quiz limit"], ["question", "Per-question countdown"]] as [TimerMode, string][]).map(([mode, label]) => {
+                const blocked = examMode && mode === "question";
+                return (
+                  <button
+                    key={mode}
+                    onClick={() => !blocked && setTimerMode(mode)}
+                    disabled={blocked}
+                    title={blocked ? "Exam Interface mode uses a whole-paper timer." : undefined}
+                    className={`rounded-lg px-4 py-2 font-medium ${effectiveTimerMode === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"} ${blocked ? "opacity-40 cursor-not-allowed" : ""}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
-            {timerMode === "quiz" && (
+            {examMode && (
+              <p className="text-xs text-slate-500">
+                Exam Interface mode lets students move between questions, so it uses a whole-paper timer —
+                the per-question countdown is unavailable.
+              </p>
+            )}
+            {effectiveTimerMode === "quiz" && (
               <label className="block text-sm text-slate-700">
                 Maximum minutes once a student starts:{" "}
                 <input type="number" min={1} value={maxMinutes} onChange={(e) => setMaxMinutes(e.target.value)} className="ml-2 w-24 rounded-lg border border-slate-300 px-3 py-1.5" />
               </label>
             )}
-            {timerMode === "question" && (
+            {effectiveTimerMode === "question" && (
               <div className="text-sm text-slate-700 space-y-2">
                 <label className="block">
                   Seconds per question:{" "}
