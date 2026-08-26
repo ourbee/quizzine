@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { COOKIE_NAME, defaultOwner, passcode, sessionValue } from "@/lib/auth";
+import { isInvited } from "@/lib/access";
 
 function withSession(email: string) {
   const res = NextResponse.json({ ok: true, email });
@@ -34,6 +35,15 @@ export async function POST(req: NextRequest) {
     const info = await res.json();
     if (info.aud !== clientId || info.email_verified !== "true" || typeof info.email !== "string") {
       return NextResponse.json({ error: "Google sign-in failed." }, { status: 401 });
+    }
+    // A verified Google account is not by itself permission to be here: this
+    // deployment is one database with one owner paying for it, and students'
+    // names and marks live in it. See lib/access.ts.
+    if (!(await isInvited(info.email))) {
+      return NextResponse.json(
+        { error: "This account has not been invited to Quizzine. Ask the owner of this site for an invitation." },
+        { status: 403 }
+      );
     }
     return withSession(info.email);
   }

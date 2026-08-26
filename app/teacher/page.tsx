@@ -191,6 +191,18 @@ export default function TeacherPage() {
           >
             Reports
           </Link>
+          <Link
+            href="/teacher/analytics"
+            className="rounded-lg border border-slate-300 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-100 transition"
+          >
+            Strengths
+          </Link>
+          <Link
+            href="/teacher/tags"
+            className="rounded-lg border border-slate-300 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-100 transition"
+          >
+            Tags
+          </Link>
           <Link href="/teacher/new" className="rounded-lg bg-blue-700 px-5 py-2.5 text-white font-semibold hover:bg-blue-800 transition">
             + New quiz
           </Link>
@@ -234,6 +246,157 @@ export default function TeacherPage() {
           </div>
         )}
       </div>
+
+      <AccountPanel />
     </main>
+  );
+}
+
+/**
+ * Backing up, and — for the owner of this deployment — who else may sign in.
+ *
+ * Both live here rather than in a settings page because both are things a
+ * teacher should trip over rather than go looking for: a term of students'
+ * results sitting in one free-tier database is worth a copy on your own disk,
+ * and an app anyone with a Google account can fill is worth knowing about.
+ */
+function AccountPanel() {
+  const [invites, setInvites] = useState<
+    { email: string; note: string | null; created_at: string; last_seen_at: string | null; quizzes: string }[]
+  >([]);
+  const [isOwner, setIsOwner] = useState(false);
+  const [quota, setQuota] = useState(0);
+  const [email, setEmail] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    const res = await fetch("/api/invites");
+    if (!res.ok) {
+      setIsOwner(false);
+      return;
+    }
+    const data = await res.json();
+    setIsOwner(true);
+    setInvites(data.invites ?? []);
+    setQuota(data.quota ?? 0);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function invite(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    const res = await fetch("/api/invites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, note }),
+    });
+    setBusy(false);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(data.error ?? "Could not send that invitation.");
+      return;
+    }
+    setEmail("");
+    setNote("");
+    load();
+  }
+
+  async function withdraw(target: string) {
+    await fetch(`/api/invites?email=${encodeURIComponent(target)}`, { method: "DELETE" });
+    load();
+  }
+
+  return (
+    <section className="mt-10 space-y-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="font-bold text-slate-900">Back up your work</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Your quizzes and every student result in one JSON file. Free database plans suspend projects that go
+          quiet over a holiday, and a question bank plus a term of marks is not something to keep in one place and
+          hope.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <a
+            href="/api/backup"
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+          >
+            Download everything
+          </a>
+          <a
+            href="/api/backup?results=0"
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            Questions only
+          </a>
+        </div>
+      </div>
+
+      {isOwner && (
+        <div className="rounded-xl border border-slate-200 bg-white p-5">
+          <h2 className="font-bold text-slate-900">Who may sign in</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            A Google account is not by itself permission to be here: quizzes and students&apos; marks all live in
+            your one database. Invited teachers may publish up to {quota} questions a day; you are not rationed.
+          </p>
+
+          <form onSubmit={invite} className="mt-3 flex flex-wrap gap-2">
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="teacher@example.com"
+              className="min-w-[14rem] flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Note (optional)"
+              className="min-w-[10rem] flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+            <button
+              disabled={busy}
+              className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+            >
+              {busy ? "Inviting…" : "Invite"}
+            </button>
+          </form>
+          {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+
+          <div className="mt-3 divide-y divide-slate-100">
+            {invites.map((i) => (
+              <div key={i.email} className="flex flex-wrap items-center gap-2 py-2 text-sm">
+                <span className="flex-1 truncate">
+                  <span className="font-medium text-slate-800">{i.email}</span>
+                  {i.note && <span className="ml-2 text-slate-400">{i.note}</span>}
+                </span>
+                <span className="text-xs text-slate-400">
+                  {Number(i.quizzes)} quiz{Number(i.quizzes) === 1 ? "" : "zes"} ·{" "}
+                  {i.last_seen_at ? `last in ${new Date(i.last_seen_at).toLocaleDateString()}` : "not signed in yet"}
+                </span>
+                <button
+                  onClick={() => withdraw(i.email)}
+                  title="Stops them signing in. Their quizzes and results are not deleted."
+                  className="rounded px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
+                >
+                  Withdraw
+                </button>
+              </div>
+            ))}
+            {!invites.length && (
+              <p className="py-2 text-sm text-slate-400">
+                Nobody else has been invited, so only you can sign in.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }

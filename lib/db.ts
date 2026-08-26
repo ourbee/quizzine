@@ -77,6 +77,25 @@ CREATE TABLE IF NOT EXISTS roll_aliases (
 );
 CREATE INDEX IF NOT EXISTS peer_reviews_quiz_idx ON peer_reviews(quiz_id);
 CREATE INDEX IF NOT EXISTS peer_reviews_reviewer_idx ON peer_reviews(reviewer_attempt_id);
+
+-- The tag vocabulary a quiz was written against, so uploads can be checked
+-- against it and the report can order dimensions the way the preset does.
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS preset text;
+
+-- Where an adaptive paper has got to: the questions served stage by stage and
+-- how each finished stage went. Null for every ordinary quiz.
+ALTER TABLE attempts ADD COLUMN IF NOT EXISTS mst jsonb;
+
+-- Who may sign in. An empty table means only the default owner, which is the
+-- safe way round: a deployment nobody has been invited to is a deployment only
+-- its owner can fill with quizzes.
+CREATE TABLE IF NOT EXISTS teacher_invites (
+  email text PRIMARY KEY,
+  invited_by text NOT NULL,
+  note text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz
+);
 `;
 
 // Quizzes created before teacher accounts existed get assigned to this owner.
@@ -109,6 +128,12 @@ async function init(): Promise<QueryFn> {
 }
 
 export function q<T = Row>(text: string, params?: unknown[]): Promise<T[]> {
-  ready ??= init();
+  // A failed connection must not be cached: holding on to the rejected promise
+  // would leave every later query failing until the process was restarted, so a
+  // database that comes back up would never be noticed.
+  ready ??= init().catch((err) => {
+    ready = null;
+    throw err;
+  });
   return ready.then((fn) => fn(text, params)) as Promise<T[]>;
 }

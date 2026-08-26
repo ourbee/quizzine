@@ -6,6 +6,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { currentTeacher } from "@/lib/auth";
+import { planEdit } from "@/lib/edit";
+import { grade } from "@/lib/grade";
+import { normalizeMstConfig, servedQuestions } from "@/lib/mst";
+import { normalizePeerConfig } from "@/lib/peer";
+import { validateQuestions } from "@/lib/validate";
+import { findPreset } from "@/lib/tags";
+import type { MstState } from "@/lib/mst";
+import type { PerQuestionResult, Question, QuizSettings, RawQuestion } from "@/lib/types";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -31,6 +39,153 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     [id]
   );
   return NextResponse.json({ quiz, attempts });
+}
+
+/**
+ * Save an edit. The plan is worked out first and only applied once the teacher
+ * has confirmed anything that changes what an existing attempt means — see
+ * lib/edit.ts for why ids are never reissued. Post `confirm: false` (the
+ * default) to preview: nothing is written and the plan comes back for the
+ * teacher to read.
+ */
+export async function PUT(req: NextRequest, ctx: Ctx) {
+  const owner = await currentTeacher();
+  if (!owner) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { id } = await ctx.params;
+  const stored = await ownedQuiz(id, owner);
+  if (!stored) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const body = await req.json().catch(() => null);
+  if (!body) return NextResponse.json({ error: "Bad request." }, { status: 400 });
+
+  const before = (stored.questions ?? []) as Question[];
+  const settingsBefore = (stored.settings ?? {}) as QuizSettings;
+
+  const submitted = await q<{ n: string }>(
+    `SELECT count(*) AS n FROM attempts WHERE quiz_id = $1 AND status = 'submitted'`,
+    [id]
+  );
+  const attemptCount = Number(submitted[0]?.n ?? 0);
+
+  // Questions arrive in the same loose shape an upload uses, so an edit gets the
+  // same validation an upload does — one place decides what a valid question is.
+  let questions = before;
+  let plan = planEdit(before, before, attemptCount > 0);
+  if (Array.isArray(body.questions)) {
+    const gradingMode = body.settings?.gradingMode ?? settingsBefore.gradingMode ?? "graded";
+    const parsed = { questions: body.questions as RawQuestion[] };
+    const result = validateQuestions(parsed, gradingMode, body.preset ?? stored.preset ?? null);
+    if (result.errors.length) {
+      return NextResponse.json({ error: result.errors[0], errors: result.errors }, { status: 400 });
+    }
+    // validateQuestions renumbers positionally; the incoming ids are what map an
+    // edited question back to the one students answered, so they are restored.
+    const withIds = result.questions.map((qn, i) => {
+      const incoming = (body.questions as RawQuestion[])[i] as RawQuestion & { id?: string };
+      return incoming?.id ? { ...qn, id: incoming.id } : { ...qn, id: "" };
+    });
+    plan = planEdit(before, withIds, attemptCount > 0);
+    questions = plan.questions;
+
+    if (!body.confirm && plan.tier !== "safe") {
+      return NextResponse.json({ preview: true, plan: { ...plan, questions: undefined }, attemptCount });
+    }
+  }
+
+  const examMode = body.settings?.examMode ?? settingsBefore.examMode ?? false;
+  const mstMode = body.settings?.mstMode ?? settingsBefore.mstMode ?? false;
+  const rawTimerMode = ["none", "quiz", "question"].includes(body.settings?.timerMode)
+    ? body.settings.timerMode
+    : (settingsBefore.timerMode ?? "none");
+  const timerMode = (examMode || mstMode) && rawTimerMode === "question" ? "none" : rawTimerMode;
+
+  const gradingMode = ["graded", "survey", "peer"].includes(body.settings?.gradingMode)
+    ? body.settings.gradingMode
+    : (settingsBefore.gradingMode ?? "graded");
+
+  const settings: QuizSettings = {
+    ...settingsBefore,
+    shuffleQuestions: !!(body.settings?.shuffleQuestions ?? settingsBefore.shuffleQuestions),
+    shuffleOptions: !!(body.settings?.shuffleOptions ?? settingsBefore.shuffleOptions),
+    gradingMode,
+    multiScoring: (body.settings?.multiScoring ?? settingsBefore.multiScoring) === "partial" ? "partial" : "exact",
+    peer: gradingMode === "peer" ? normalizePeerConfig(body.settings?.peer ?? settingsBefore.peer) : undefined,
+    timerMode,
+    maxMinutes: Number(body.settings?.maxMinutes ?? settingsBefore.maxMinutes) > 0
+      ? Number(body.settings?.maxMinutes ?? settingsBefore.maxMinutes)
+      : undefined,
+    perQuestionSeconds:
+      timerMode === "question" && Number(body.settings?.perQuestionSeconds ?? settingsBefore.perQuestionSeconds) > 0
+        ? Number(body.settings?.perQuestionSeconds ?? settingsBefore.perQuestionSeconds)
+        : undefined,
+    examMode,
+    mstMode,
+    mst: mstMode ? normalizeMstConfig(body.settings?.mst ?? settingsBefore.mst) : undefined,
+    closesAt: body.settings?.closesAt !== undefined ? body.settings.closesAt || undefined : settingsBefore.closesAt,
+    allowMultiple: !!(body.settings?.allowMultiple ?? settingsBefore.allowMultiple),
+  };
+
+  const preset = body.preset !== undefined ? (findPreset(body.preset)?.id ?? null) : (stored.preset ?? null);
+
+  await q(
+    `UPDATE quizzes
+        SET title = $1, description = $2, intro_media = $3, questions = $4,
+            settings = $5, theme = $6, preset = $7
+      WHERE id = $8`,
+    [
+      typeof body.title === "string" && body.title.trim() ? body.title.trim() : stored.title,
+      body.description !== undefined
+        ? (typeof body.description === "string" && body.description.trim() ? body.description.trim() : null)
+        : (stored.description ?? null),
+      body.introMedia !== undefined
+        ? (typeof body.introMedia === "string" && body.introMedia.trim() ? body.introMedia.trim() : null)
+        : (stored.intro_media ?? null),
+      JSON.stringify(questions),
+      JSON.stringify(settings),
+      typeof body.theme === "string" ? body.theme : stored.theme,
+      preset,
+      id,
+    ]
+  );
+
+  let regraded = 0;
+  if (attemptCount > 0 && (plan.regrade.length || plan.removed.length || plan.added.length)) {
+    regraded = await regradeAttempts(id, questions, settings);
+  }
+
+  return NextResponse.json({ ok: true, plan: { ...plan, questions: undefined }, regraded });
+}
+
+/**
+ * Re-mark every submitted attempt from the answers already stored. The answers
+ * themselves are never touched — only the marks derived from them — so this is
+ * repeatable and always reflects the quiz as it stands now.
+ */
+async function regradeAttempts(quizId: string, questions: Question[], settings: QuizSettings): Promise<number> {
+  const attempts = await q<{
+    id: string;
+    answers: Record<string, string> | null;
+    mst: MstState | null;
+  }>(`SELECT id, answers, mst FROM attempts WHERE quiz_id = $1 AND status = 'submitted'`, [quizId]);
+
+  let count = 0;
+  for (const attempt of attempts) {
+    // An adaptive paper is marked on the questions that student was served, not
+    // on the whole bank they were drawn from.
+    const paper =
+      settings.mstMode && attempt.mst
+        ? servedQuestions(questions, attempt.mst, normalizeMstConfig(settings.mst))
+        : questions;
+    const { per, score, max } = grade(paper, attempt.answers ?? {}, settings.multiScoring ?? "exact");
+    await q(`UPDATE attempts SET per_question = $1, score = $2, max_score = $3 WHERE id = $4`, [
+      JSON.stringify(per satisfies PerQuestionResult[]),
+      score,
+      max,
+      attempt.id,
+    ]);
+    count += 1;
+  }
+  return count;
 }
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {

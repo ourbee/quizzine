@@ -405,6 +405,12 @@ export default function ReportsPage() {
           >
             Export Excel
           </button>
+          <Link
+            href="/teacher/analytics"
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 print:hidden"
+          >
+            Strengths and weaknesses
+          </Link>
         </div>
       </div>
 

@@ -5,6 +5,7 @@
 
 import { createHmac, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
+import { defaultOwner } from "./owner.ts";
 
 export const COOKIE_NAME = "qd_teacher";
 
@@ -13,9 +14,7 @@ function secret(): string {
 }
 
 /** Owner assigned to passcode sign-ins and to quizzes created before accounts existed. */
-export function defaultOwner(): string {
-  return (process.env.DEFAULT_OWNER_EMAIL || "ritwik.jude@gmail.com").toLowerCase();
-}
+export { defaultOwner };
 
 export function passcode(): string {
   return process.env.TEACHER_PASSCODE || "quizzine";

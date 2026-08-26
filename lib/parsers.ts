@@ -7,6 +7,33 @@ import type { ParsedQuiz, RawQuestion } from "./types";
 
 const OPTION_KEYS = ["A", "B", "C", "D", "E", "F"];
 
+/**
+ * Headers that name a tag dimension directly, so a sheet can carry one column
+ * per dimension instead of packing them all into Tags. Keyed by the normalized
+ * header; the value is the dimension name the tag is stored under.
+ */
+const DIMENSION_COLUMN_NAMES: Record<string, string> = {
+  period: "Period",
+  era: "Period",
+  genre: "Genre",
+  form: "Genre",
+  author: "Author",
+  writer: "Author",
+  poet: "Author",
+  text: "Text",
+  work: "Text",
+  skill: "Skill",
+  theme: "Theme",
+  topic: "Topic",
+  unit: "Unit",
+  module: "Unit",
+  movement: "Movement",
+  region: "Region",
+  paper: "Paper",
+  section: "Section",
+};
+const DIMENSION_COLUMNS = new Set(Object.keys(DIMENSION_COLUMN_NAMES));
+
 function emptyQuestion(): RawQuestion {
   return { options: [] };
 }
@@ -53,7 +80,24 @@ export function parseSheetRows(rows: Record<string, unknown>[]): ParsedQuiz {
       points: get("points", "marks", "score"),
       feedbackCorrect: get("feedbackcorrect", "correctfeedback"),
       feedbackIncorrect: get("feedbackincorrect", "feedbackwrong", "incorrectfeedback"),
+      tags: get("tags", "tag", "categories", "category", "labels"),
+      difficulty: get("difficulty", "level", "difficultylevel"),
     };
+    // Dimensions may also arrive as columns of their own — a Period column beside
+    // a Genre column is how a teacher naturally lays a sheet out, and reads the
+    // same as writing "Period: Victorian" in the Tags cell.
+    const columnTags: string[] = [];
+    for (const [header, value] of Object.entries(norm)) {
+      if (!DIMENSION_COLUMNS.has(header) || !value) continue;
+      const dimension = DIMENSION_COLUMN_NAMES[header];
+      for (const piece of value.split(/[;,\n]+/)) {
+        const v = piece.trim();
+        if (v) columnTags.push(`${dimension}: ${v}`);
+      }
+    }
+    if (columnTags.length) {
+      question.tags = [question.tags, columnTags.join("; ")].filter(Boolean).join("; ");
+    }
     for (const key of OPTION_KEYS) {
       const lower = key.toLowerCase();
       const optText = get(`option${lower}`, lower);
@@ -107,6 +151,25 @@ function readCorrect(item: Record<string, unknown>): string | undefined {
   return String(value);
 }
 
+/** Tags from a JSON question: a list, one string to split, or dimensions as keys. */
+function readTags(item: Record<string, unknown>): string | string[] | undefined {
+  const value = item.tags ?? item.tag ?? item.categories ?? item.labels;
+  if (value === undefined || value === null) return undefined;
+  if (Array.isArray(value)) return value.map((v) => String(v));
+  if (typeof value === "object") {
+    // {"Period": "Victorian", "Genre": ["Poetry", "Lyric"]}
+    const out: string[] = [];
+    for (const [dimension, raw] of Object.entries(value as Record<string, unknown>)) {
+      for (const v of Array.isArray(raw) ? raw : [raw]) {
+        const text = String(v).trim();
+        if (text) out.push(`${dimension}: ${text}`);
+      }
+    }
+    return out;
+  }
+  return String(value);
+}
+
 /** Parse a pasted/uploaded JSON quiz: either {title, description, questions:[...]} or a bare array. */
 export function parseJsonText(text: string): ParsedQuiz {
   const data = JSON.parse(text);
@@ -126,6 +189,8 @@ export function parseJsonText(text: string): ParsedQuiz {
       points: item.points as number | undefined,
       feedbackCorrect: item.feedbackCorrect !== undefined ? String(item.feedbackCorrect) : undefined,
       feedbackIncorrect: item.feedbackIncorrect !== undefined ? String(item.feedbackIncorrect) : undefined,
+      tags: readTags(item),
+      difficulty: (item.difficulty ?? item.level) as string | number | undefined,
     };
     const opts = item.options;
     if (Array.isArray(opts)) {
@@ -167,7 +232,7 @@ export function parseMarkdownText(text: string): ParsedQuiz {
   let current: RawQuestion | null = null;
   let append: ((s: string) => void) | null = null;
 
-  const keyRe = /^\s*(Q|Question|Type|PassageTitle|Passage|Media|MediaURL|Correct|CorrectAnswer|CorrectAnswers|Answer|Answers|Graded|Scored|Points|Marks|Title|Description|FeedbackCorrect|FeedbackIncorrect|F[A-F]|[A-F])\s*[:.)]\s?(.*)$/i;
+  const keyRe = /^\s*(Q|Question|Type|PassageTitle|Passage|Media|MediaURL|Correct|CorrectAnswer|CorrectAnswers|Answer|Answers|Graded|Scored|Points|Marks|Tags|Tag|Difficulty|Level|Title|Description|FeedbackCorrect|FeedbackIncorrect|F[A-F]|[A-F])\s*[:.)]\s?(.*)$/i;
 
   for (const line of text.split(/\r?\n/)) {
     const m = line.match(keyRe);
@@ -203,6 +268,10 @@ export function parseMarkdownText(text: string): ParsedQuiz {
         q.correct = value;
       else if (key === "GRADED" || key === "SCORED") q.graded = value;
       else if (key === "POINTS" || key === "MARKS") q.points = value;
+      else if (key === "TAGS" || key === "TAG") {
+        q.tags = value;
+        append = (s) => (q.tags = `${q.tags}; ${s}`);
+      } else if (key === "DIFFICULTY" || key === "LEVEL") q.difficulty = value;
       else if (key === "FEEDBACKCORRECT") {
         q.feedbackCorrect = value;
         append = (s) => (q.feedbackCorrect = `${q.feedbackCorrect} ${s}`);

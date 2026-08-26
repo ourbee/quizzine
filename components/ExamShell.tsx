@@ -49,6 +49,13 @@ interface Props {
   onSaveAnswer: (qid: string, answer: string) => void;
   onSetMarked: (qid: string, marked: boolean) => void;
   onSubmit: () => void;
+  /**
+   * Adaptive papers only: which stage of how many is on screen. The palette,
+   * the counts and the confirmation all describe the CURRENT stage, because
+   * that is the whole of what the student can still move around in — a closed
+   * stage is gone, exactly as a locked section is in the real examination.
+   */
+  stage?: { number: number; total: number; last: boolean };
 }
 
 function fmtExamClock(ms: number): string {
@@ -116,6 +123,7 @@ export default function ExamShell({
   onSaveAnswer,
   onSetMarked,
   onSubmit,
+  stage,
 }: Props) {
   const question = questions[index];
   /**
@@ -357,7 +365,7 @@ export default function ExamShell({
                 disabled={submitting}
                 className="rounded bg-green-600 px-5 py-2 text-xs font-bold uppercase text-white hover:bg-green-700 disabled:opacity-50"
               >
-                {submitting ? "Submitting…" : "Submit"}
+                {submitting ? (stage && !stage.last ? "Saving…" : "Submitting…") : stage && !stage.last ? "Submit section" : "Submit"}
               </button>
             </div>
             {submitError && <p className="pb-2 pt-1 text-xs text-red-600">{submitError}</p>}
@@ -402,7 +410,16 @@ export default function ExamShell({
       {confirming && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 px-4">
           <div className="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl">
-            <h3 className="text-base font-bold">Submit your paper?</h3>
+            <h3 className="text-base font-bold">
+              {stage && !stage.last ? `Finish section ${stage.number}?` : "Submit your paper?"}
+            </h3>
+            {stage && (
+              <p className="mt-1 text-xs text-slate-500">
+                {stage.last
+                  ? `This is the last section of ${stage.total}.`
+                  : `Section ${stage.number} of ${stage.total}. The next section is chosen from how this one goes, so you cannot come back to these questions.`}
+              </p>
+            )}
             <dl className="mt-3 space-y-1.5 text-sm">
               <div className="flex justify-between"><dt className="text-slate-500">Total questions</dt><dd className="font-semibold tabular-nums">{summary.total}</dd></div>
               <div className="flex justify-between"><dt className="text-slate-500">Answered</dt><dd className="font-semibold tabular-nums text-green-700">{summary.answered}</dd></div>
@@ -416,7 +433,8 @@ export default function ExamShell({
             )}
             {summary.notAnswered > 0 && (
               <p className="mt-3 rounded bg-red-50 p-2 text-xs text-red-700">
-                {summary.notAnswered} question{summary.notAnswered === 1 ? " is" : "s are"} still unanswered. You cannot return after submitting.
+                {summary.notAnswered} question{summary.notAnswered === 1 ? " is" : "s are"} still unanswered. You cannot return
+                {stage && !stage.last ? " to this section." : " after submitting."}
               </p>
             )}
             <div className="mt-4 flex gap-2">
@@ -429,7 +447,7 @@ export default function ExamShell({
                 disabled={submitting}
                 className="flex-1 rounded bg-green-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"
               >
-                Submit
+                {stage && !stage.last ? "Next section" : "Submit"}
               </button>
             </div>
           </div>

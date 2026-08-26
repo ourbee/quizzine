@@ -4,6 +4,15 @@
  */
 
 import { splitKeys } from "./questions.ts";
+import {
+  MAX_DIFFICULTY,
+  MIN_DIFFICULTY,
+  extractDifficulty,
+  findPreset,
+  normalizeTags,
+  readDifficulty,
+  tagsOutsidePreset,
+} from "./tags.ts";
 import type { GradingMode, ParsedQuiz, Question, QType, RawQuestion } from "./types";
 
 /**
@@ -87,10 +96,18 @@ export interface ValidationResult {
   questions: Question[];
 }
 
-export function validateQuestions(parsed: ParsedQuiz, gradingMode: GradingMode = "graded"): ValidationResult {
+export function validateQuestions(
+  parsed: ParsedQuiz,
+  gradingMode: GradingMode = "graded",
+  /** When set, tags outside this vocabulary are reported so drift is caught at
+   *  the gate rather than months later in a report. They are still saved. */
+  presetId?: string | null
+): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
   const questions: Question[] = [];
+  const preset = findPreset(presetId);
+  const strayTags = new Set<string>();
   // Survey and peer-reviewed quizzes both leave every question unmarked at
   // submission; peers supply the marks for the latter, later.
   const surveyQuiz = gradingMode !== "graded";
@@ -145,6 +162,19 @@ export function validateQuestions(parsed: ParsedQuiz, gradingMode: GradingMode =
       warnings.push(`${row}: MediaURL "${media}" does not look like a link (should start with http/https).`);
     }
 
+    // A Difficulty column wins over one written into the Tags cell; both are
+    // accepted because a teacher filling a template should not have to know
+    // which one the app prefers.
+    const tagged = extractDifficulty(normalizeTags(raw.tags));
+    const tags = tagged.tags;
+    let difficulty = readDifficulty(raw.difficulty) ?? tagged.difficulty;
+    if (raw.difficulty !== undefined && raw.difficulty !== "" && difficulty === undefined) {
+      warnings.push(
+        `${row}: Difficulty "${raw.difficulty}" was not understood — use ${MIN_DIFFICULTY}–${MAX_DIFFICULTY}, or a word like easy, medium or hard. Left unset.`
+      );
+    }
+    if (preset) for (const t of tagsOutsidePreset(tags, preset)) strayTags.add(t);
+
     const question: Question = {
       id: `q${i + 1}`,
       type,
@@ -156,6 +186,8 @@ export function validateQuestions(parsed: ParsedQuiz, gradingMode: GradingMode =
       points,
       feedbackCorrect: (raw.feedbackCorrect ?? "").toString().trim() || undefined,
       feedbackIncorrect: (raw.feedbackIncorrect ?? "").toString().trim() || undefined,
+      tags: tags.length ? tags : undefined,
+      difficulty,
     };
     if (!graded) question.graded = false;
 
@@ -223,6 +255,21 @@ export function validateQuestions(parsed: ParsedQuiz, gradingMode: GradingMode =
 
     questions.push(question);
   });
+
+  if (strayTags.size && preset) {
+    const list = [...strayTags].slice(0, 8);
+    warnings.push(
+      `${strayTags.size} tag${strayTags.size === 1 ? " is" : "s are"} outside the “${preset.name}” list (${list.join(", ")}${strayTags.size > list.length ? ", …" : ""}). They will be saved — check the spelling matches the tags you already use.`
+    );
+  }
+
+  const scored = questions.filter((qn) => qn.graded !== false);
+  const untagged = scored.filter((qn) => !qn.tags?.length).length;
+  if (untagged && untagged < scored.length) {
+    warnings.push(
+      `${untagged} of ${scored.length} scored questions have no Tags, so they will not appear in the strengths and weaknesses report.`
+    );
+  }
 
   return { errors, warnings, questions };
 }

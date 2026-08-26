@@ -6,9 +6,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { currentTeacher } from "@/lib/auth";
+import { checkQuota } from "@/lib/access";
 import { genId, slugify } from "@/lib/normalize";
 import { correctKeysOf, isGraded } from "@/lib/questions";
 import { normalizePeerConfig } from "@/lib/peer";
+import { normalizeMstConfig } from "@/lib/mst";
+import { findPreset } from "@/lib/tags";
 import type { Question, QuizSettings } from "@/lib/types";
 
 export async function GET() {
@@ -35,6 +38,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "A title and at least one question are required." }, { status: 400 });
   }
   const questions = body.questions as Question[];
+
+  // Rationing is per teacher, not per quiz, so a hundred one-question quizzes
+  // cost the same as one hundred-question quiz.
+  const quota = await checkQuota(owner, questions.length);
+  if (!quota.ok) {
+    return NextResponse.json(
+      {
+        error: `That would publish ${questions.length} questions, and ${quota.remaining} of your daily allowance of ${quota.limit} are left. The allowance frees up 24 hours after each quiz was created.`,
+      },
+      { status: 429 }
+    );
+  }
+
   for (const [i, qn] of questions.entries()) {
     const scored = isGraded(qn);
     // Unscored questions are worth exactly nothing; scored ones must be worth something.
@@ -60,11 +76,15 @@ export async function POST(req: NextRequest) {
   const groupMin = groupMode ? Math.min(50, Math.max(1, Math.floor(Number(body.settings?.groupMin)) || 1)) : undefined;
   const groupMax = groupMode ? Math.min(50, Math.max(groupMin ?? 1, Math.floor(Number(body.settings?.groupMax)) || groupMin || 1)) : undefined;
   const examMode = !!body.settings?.examMode;
+  const mstMode = !!body.settings?.mstMode;
   // The exam interface lets a student roam the paper by its palette, which the
   // per-question timer exists to forbid. Exam mode wins; the teacher form offers
   // the same two timers it leaves standing.
   const rawTimerMode = ["none", "quiz", "question"].includes(body.settings?.timerMode) ? body.settings.timerMode : "none";
-  const timerMode = examMode && rawTimerMode === "question" ? "none" : rawTimerMode;
+  // An adaptive paper rules the per-question timer out for the same reason the
+  // exam interface does: the student must be free to move around the stage they
+  // are sitting.
+  const timerMode = (examMode || mstMode) && rawTimerMode === "question" ? "none" : rawTimerMode;
   const settings: QuizSettings = {
     shuffleQuestions: !!body.settings?.shuffleQuestions,
     shuffleOptions: !!body.settings?.shuffleOptions,
@@ -78,6 +98,8 @@ export async function POST(req: NextRequest) {
         ? Number(body.settings.perQuestionSeconds)
         : undefined,
     examMode,
+    mstMode,
+    mst: mstMode ? normalizeMstConfig(body.settings?.mst) : undefined,
     closesAt: body.settings?.closesAt || undefined,
     allowMultiple: !!body.settings?.allowMultiple,
     groupMode,
@@ -86,9 +108,10 @@ export async function POST(req: NextRequest) {
   };
   const id = genId();
   const slug = slugify(body.title);
+  const preset = findPreset(body.preset)?.id ?? null;
   await q(
-    `INSERT INTO quizzes (id, slug, title, description, intro_media, questions, settings, theme, owner)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    `INSERT INTO quizzes (id, slug, title, description, intro_media, questions, settings, theme, owner, preset)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       id,
       slug,
@@ -99,6 +122,7 @@ export async function POST(req: NextRequest) {
       JSON.stringify(settings),
       typeof body.theme === "string" ? body.theme : "slate",
       owner,
+      preset,
     ]
   );
   return NextResponse.json({ id, slug });

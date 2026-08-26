@@ -215,6 +215,18 @@ export default function QuizDetailPage() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <Link
+            href={`/teacher/quiz/${quiz.id}/edit`}
+            className="rounded-lg px-4 py-2 text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200"
+          >
+            Edit
+          </Link>
+          <Link
+            href="/teacher/tags"
+            className="rounded-lg px-4 py-2 text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200"
+          >
+            Tags
+          </Link>
           <button
             onClick={toggleAccepting}
             className={`rounded-lg px-4 py-2 text-sm font-semibold ${

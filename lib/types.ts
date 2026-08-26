@@ -3,6 +3,7 @@
  * https://github.com/ourbee
  */
 
+import type { AbilityEstimate, MstConfig } from "./mst";
 import type { PeerConfig } from "./peer";
 
 /** The input control a question uses. Whether it is scored is a separate matter — see `graded`. */
@@ -38,6 +39,16 @@ export interface Question {
   points: number; // always 0 when graded is false
   feedbackCorrect?: string;
   feedbackIncorrect?: string;
+  /**
+   * What this question is testing, written `Dimension: Value`
+   * ("Period: Victorian"). One question carries as many as it likes and counts
+   * into every one of them — see lib/tags.ts. Absent means untagged, which is
+   * only a loss to the strengths-and-weaknesses report, never to grading.
+   */
+  tags?: string[];
+  /** 1 (very easy) to 5 (very difficult). Routes the adaptive exam; reported as
+   *  its own dimension everywhere else. Absent means unstated. */
+  difficulty?: number;
 }
 
 export type TimerMode = "none" | "quiz" | "question";
@@ -66,6 +77,15 @@ export interface QuizSettings {
    * Never combined with timerMode "question" — see the note in lib/examstate.ts.
    */
   examMode?: boolean;
+  /**
+   * Deliver the paper adaptively, in stages: everyone sits the same first
+   * stage, and each stage after that is drawn harder or easier according to how
+   * the last one went. Absent means off. Sits happily alongside `examMode` —
+   * the palette then covers the current stage, which is the one thing a student
+   * can still move around in. See lib/mst.ts for why staging, not per question.
+   */
+  mstMode?: boolean;
+  mst?: MstConfig;
   closesAt?: string; // ISO datetime; stop accepting new starts
   allowMultiple: boolean;
   groupMode?: boolean; // one submission per group instead of per student
@@ -137,6 +157,8 @@ export interface ReviewPayload {
   peerReview?: boolean;
   flags: AttemptFlags;
   submittedAt: string;
+  /** Adaptive papers only, and only when the teacher asked for it. */
+  ability?: AbilityEstimate;
 }
 
 export interface ParsedQuiz {
@@ -161,4 +183,8 @@ export interface RawQuestion {
   points?: string | number;
   feedbackCorrect?: string;
   feedbackIncorrect?: string;
+  /** Raw Tags cell, or an already-split list from JSON. */
+  tags?: string | string[];
+  /** Raw Difficulty cell: 1–5, or a word like "hard". */
+  difficulty?: string | number;
 }

@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
+import { normalizeMstConfig } from "@/lib/mst";
 import { isGraded, isSurvey, maxPoints } from "@/lib/questions";
 import type { Question, QuizSettings } from "@/lib/types";
 
@@ -33,6 +34,10 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
     (settings.closesAt ? Date.now() > new Date(settings.closesAt).getTime() : false);
 
   const questions = quiz.questions as Question[];
+  // An adaptive paper is dealt stage by stage from the server, so the bank never
+  // leaves it — a student who could fetch all hundred questions would be reading
+  // the ones they have not been routed to yet.
+  const mst = settings.mstMode ? normalizeMstConfig(settings.mst) : null;
   // Whether a question is scored is safe to reveal; which option is right is not.
   const sanitized = questions.map((qn) => ({
     id: qn.id,
@@ -56,6 +61,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
       maxMinutes: settings.maxMinutes,
       perQuestionSeconds: settings.perQuestionSeconds,
       examMode: settings.examMode,
+      mstMode: !!settings.mstMode,
       closesAt: settings.closesAt,
       shuffleQuestions: settings.shuffleQuestions,
       shuffleOptions: settings.shuffleOptions,
@@ -65,12 +71,13 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
       groupMax: settings.groupMax,
       multiScoring: settings.multiScoring,
     },
-    questionCount: questions.length,
-    totalPoints: maxPoints(questions),
+    questionCount: mst ? Math.min(questions.length, mst.stages * mst.perStage) : questions.length,
+    totalPoints: mst ? undefined : maxPoints(questions),
+    mst: mst ? { stages: mst.stages, perStage: mst.perStage } : undefined,
     survey: settings.gradingMode === "survey" || isSurvey(questions),
     peerReview: settings.gradingMode === "peer",
     phase,
     closed,
-    questions: closed ? [] : sanitized,
+    questions: closed || mst ? [] : sanitized,
   });
 }

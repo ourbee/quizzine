@@ -3,6 +3,8 @@
  * https://github.com/ourbee
  */
 
+import { TAG_PRESETS, difficultyLabel, findPreset, type TagPreset } from "./tags.ts";
+
 export const AI_PROMPT = `You are helping me, a teacher, build a quiz file for the Quizzine app. This happens in TWO steps. Do not skip step 1.
 
 STEP 1 — READ MY BRIEF, THEN ASK ME ABOUT ANYTHING UNCLEAR.
@@ -22,7 +24,8 @@ CHECKLIST — ask whenever I have not made these clear:
 4. Whether answers are marked at all. Is this a scored quiz, an unscored survey or opinion poll, or work I intend to have peer reviewed? Ask if my brief could mean either.
 5. Student level. Which class, year or semester, and roughly what difficulty?
 6. Coverage and balance, when it matters. How to split the questions across topics, or how many of each type.
-7. Anything else genuinely ambiguous in what I wrote — an unclear instruction, a contradiction, a term that could mean two things.
+7. Tagging. Which dimensions should each question be tagged under (period, genre, author, skill, unit, and so on), and should every question carry a difficulty? Ask if I have not said, unless the TAGGING section below already names a fixed list.
+8. Anything else genuinely ambiguous in what I wrote — an unclear instruction, a contradiction, a term that could mean two things.
 
 If I say "you decide", "use your judgement", "no questions", or "just produce it", skip the questions entirely and go to step 2 using sensible choices and the defaults.
 
@@ -44,6 +47,8 @@ MY BRIEF (anything I leave blank or vague is something to ask about in step 1):
 - Scored, survey or peer reviewed: [scored unless I say otherwise]
 - Points per question: [leave blank for 1]
 - Language/style: [leave blank for British English]
+- Tag vocabulary: [leave blank to use the list below, or name your own dimensions]
+- Difficulty spread: [leave blank for an even spread across 1-5]
 - Output format: [leave blank for Excel/CSV. Otherwise: B = JSON, C = plain-text blocks, D = Google Apps Script quiz builder]
 - Number of quizzes: [leave blank for 1 — or e.g. "5 quizzes, one per theme". For several quizzes use format A with one SHEET per quiz (sheet name = quiz title), or format D with one Google Form per quiz.]
 
@@ -67,11 +72,27 @@ QUALITY RULES (mandatory):
 9. MediaURL is optional: a public image, audio file, or YouTube link relevant to the question.
 10. Passage is optional material the student reads BEFORE answering — a poem, an extract, a paragraph of theory, or a sample response to imitate. PassageTitle heads it ("Sample response", "Read this first", "The passage"). Leave both empty unless I ask for material or my source material only makes sense if quoted to the student. To put ONE passage in front of SEVERAL questions, repeat the identical Passage and PassageTitle text on every one of those rows, keeping them next to each other — the app shows repeated material once, above the whole run. Do not paraphrase it differently on each row or it will be shown again each time.
 
+TAGGING (this is what makes the strengths-and-weaknesses report work — do not skip it):
+
+Every question needs a Tags value and a Difficulty value.
+
+Tags say what the question is TESTING, written as "Dimension: Value" and separated by semicolons:
+Period: Victorian; Genre: Poetry; Author: Tennyson; Skill: Close reading
+
+Rules for tagging:
+1. Give each question 2 to 5 tags. One tag per dimension. Never invent a tag for something the question does not actually test.
+2. Use EXACTLY the dimension names and values listed under MY TAG VOCABULARY below, spelled exactly as written there. Consistency matters more than precision: "Victorian" and "Victorian Age" as two spellings of one period split my report into two half-empty buckets and make both useless.
+3. Where a dimension is marked "open" (Author, Text), any value is fine, but use the standard form of the name — "Tennyson", not "Lord Alfred Tennyson" — and use the same form every time.
+4. If a question genuinely does not fit a dimension, leave that dimension out rather than forcing it.
+5. Tag what the question TESTS, not what it mentions in passing. A question that quotes Tennyson to ask about metre is Skill: Close reading and Genre: Poetry, not Author: Tennyson.
+
+Difficulty is a whole number from 1 to 5: 1 very easy, 2 easy, 3 medium, 4 difficult, 5 very difficult. Judge it against the level I named, not against the general population. Spread the difficulties deliberately rather than marking everything 3 — if I have asked for an adaptive paper I need a usable number of questions at EVERY level, so aim for a roughly even spread across 1 to 5 unless I have said otherwise.
+
 OUTPUT FORMATS:
 
 FORMAT A — Excel/CSV. THIS IS THE DEFAULT: use it unless I have explicitly named another format. A table with EXACTLY these columns, one row per question:
-Question | Type | OptionA | OptionB | OptionC | OptionD | CorrectAnswer | FeedbackA | FeedbackB | FeedbackC | FeedbackD | Points | MediaURL | Passage | PassageTitle
-(Give me a downloadable .xlsx file if you can produce one — that is what I want by default. If you cannot, give me a CSV code block I can paste into a spreadsheet instead. CorrectAnswer holds letters only — one letter for "mcq", several comma-separated for "multi", empty for "poll", "open", "short" and "essay". For several quizzes, put each quiz on its own sheet and name the sheet after the quiz — the app builds one quiz per sheet.)
+Question | Type | OptionA | OptionB | OptionC | OptionD | CorrectAnswer | FeedbackA | FeedbackB | FeedbackC | FeedbackD | Points | Tags | Difficulty | MediaURL | Passage | PassageTitle
+(Tags and Difficulty are described under TAGGING below. Give me a downloadable .xlsx file if you can produce one — that is what I want by default. If you cannot, give me a CSV code block I can paste into a spreadsheet instead. CorrectAnswer holds letters only — one letter for "mcq", several comma-separated for "multi", empty for "poll", "open", "short" and "essay". For several quizzes, put each quiz on its own sheet and name the sheet after the quiz — the app builds one quiz per sheet.)
 
 FORMAT B — JSON: a single code block:
 {
@@ -89,6 +110,8 @@ FORMAT B — JSON: a single code block:
       ],
       "correct": "B",
       "points": 1,
+      "tags": ["Period: Victorian", "Genre: Poetry", "Author: Tennyson"],
+      "difficulty": 3,
       "media": "",
       "passage": "",
       "passageTitle": ""
@@ -113,6 +136,8 @@ FC: feedback for C
 FD: feedback for D
 Correct: B
 Points: 1
+Tags: Period: Victorian; Genre: Poetry; Author: Tennyson
+Difficulty: 3
 Media: (optional URL)
 Passage: (optional material to read first — repeat it verbatim on each question it covers)
 PassageTitle: (optional heading for that material)
@@ -122,3 +147,33 @@ PassageTitle: (optional heading for that material)
 FORMAT D — Google Apps Script: a .gs / .js file that builds the quiz as a Google Form, i.e. FormApp.create(title).setDescription(...), form.addMultipleChoiceItem() with setTitle/setPoints/setChoices(createChoice(text, isCorrect)), and FormApp.createFeedback().setText(...) passed to setFeedbackForCorrect / setFeedbackForIncorrect. Use form.addCheckboxItem() where several answers are correct, and form.addParagraphTextItem() for essay or open questions. For a survey, build the Form with no setPoints and no createChoice(text, true) anywhere — Quizzine then collects the responses without scoring them. Build one Form per quiz — several Forms in one file is fine, and each becomes its own quiz. Every builder function must be callable with no arguments so the app can run it.
 
 Use no markdown bold/italics inside the final output values.`;
+
+/** The tag vocabulary section appended to the prompt for a chosen preset. */
+export function presetPromptSection(preset: TagPreset): string {
+  const lines = preset.dimensions.map((d) => {
+    if (!d.values.length) return `- ${d.name}: open — any value, but always in the same standard form.`;
+    return `- ${d.name}: ${d.values.join(" | ")}`;
+  });
+  return [
+    "",
+    "MY TAG VOCABULARY:",
+    `Use the "${preset.name}" list. ${preset.description}`,
+    "",
+    ...lines,
+    "",
+    `Difficulty is a separate column, 1 to 5 (${[1, 2, 3, 4, 5].map((n) => `${n} ${difficultyLabel(n).toLowerCase()}`).join(", ")}). Do not also write it as a tag.`,
+  ].join("\n");
+}
+
+/** The prompt, with a preset's vocabulary spliced in where one is chosen. */
+export function aiPrompt(presetId?: string | null): string {
+  const preset = findPreset(presetId);
+  if (!preset) {
+    const names = TAG_PRESETS.map((p) => p.name).join(", ");
+    return `${AI_PROMPT}
+
+MY TAG VOCABULARY:
+I have not fixed one. Propose a short list of dimensions and values for this subject in step 1 and let me approve it, so that every quiz after this one uses the same words. (Quizzine ships ready-made lists for: ${names}.)`;
+  }
+  return AI_PROMPT + presetPromptSection(preset);
+}

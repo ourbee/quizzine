@@ -14,7 +14,9 @@ import { looksLikeAppsScript, parseAppsScript } from "@/lib/appsscript";
 import { validateQuestions } from "@/lib/validate";
 import { correctKeysOf, groupByPassage, isGraded } from "@/lib/questions";
 import { DEFAULT_PEER_CONFIG, peerMaxScore, type PeerConfig } from "@/lib/peer";
-import { AI_PROMPT } from "@/lib/aiprompt";
+import { aiPrompt } from "@/lib/aiprompt";
+import { DEFAULT_MST, mstCapacity, type MstConfig } from "@/lib/mst";
+import { TAG_PRESETS, difficultyLabel } from "@/lib/tags";
 import { THEMES } from "@/lib/themes";
 import type { GradingMode, MultiScoring, ParsedQuiz, Question, TimerMode } from "@/lib/types";
 import Material from "@/components/Material";
@@ -56,7 +58,7 @@ interface PublishResult {
 const TEMPLATE_HEADERS = [
   "Question", "Type", "OptionA", "OptionB", "OptionC", "OptionD",
   "CorrectAnswer", "FeedbackA", "FeedbackB", "FeedbackC", "FeedbackD",
-  "Points", "MediaURL", "Passage", "PassageTitle",
+  "Points", "Tags", "Difficulty", "MediaURL", "Passage", "PassageTitle",
 ];
 
 // Shown on the intake screen so the Type column is self-explanatory.
@@ -88,13 +90,13 @@ const TEMPLATE_ROWS = [
     FeedbackB: "Correct: 'ubiquitous' means present everywhere at once, i.e. omnipresent.",
     FeedbackC: "'Fragile' describes physical delicacy, not how widespread something is.",
     FeedbackD: "'Ancient' refers to age, not distribution.",
-    Points: 1, MediaURL: "", Passage: "", PassageTitle: "",
+    Points: 1, Tags: "Skill: Vocabulary; Topic: Word meaning", Difficulty: 2, MediaURL: "", Passage: "", PassageTitle: "",
   },
   {
     Question: "In two or three sentences, explain the difference between a metaphor and a simile.",
     Type: "short", OptionA: "", OptionB: "", OptionC: "", OptionD: "",
     CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
-    Points: 2, MediaURL: "", Passage: "", PassageTitle: "",
+    Points: 2, Tags: "Skill: Critical terminology; Genre: Criticism", Difficulty: 3, MediaURL: "", Passage: "", PassageTitle: "",
   },
   {
     Question: "Which of these are figures of speech? Tick all that apply.",
@@ -104,26 +106,26 @@ const TEMPLATE_ROWS = [
     FeedbackB: "Iambic pentameter is a metre — a matter of rhythm, not of figurative meaning.",
     FeedbackC: "Correct: synecdoche lets a part stand for the whole, or the whole for a part.",
     FeedbackD: "A quatrain is a four-line stanza, a unit of form rather than a figure of speech.",
-    Points: 2, MediaURL: "", Passage: "", PassageTitle: "",
+    Points: 2, Tags: "Skill: Critical terminology; Topic: Figures of speech", Difficulty: 3, MediaURL: "", Passage: "", PassageTitle: "",
   },
   {
     Question: "Which of these poets did you find most rewarding to read this term?",
     Type: "poll", OptionA: "Kamala Das", OptionB: "A. K. Ramanujan", OptionC: "Arun Kolatkar", OptionD: "Eunice de Souza",
     CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
-    Points: "", MediaURL: "", Passage: "", PassageTitle: "",
+    Points: "", Tags: "", Difficulty: "", MediaURL: "", Passage: "", PassageTitle: "",
   },
   {
     Question: "What is one thing from this term's reading you would like to discuss further in class?",
     Type: "open", OptionA: "", OptionB: "", OptionC: "", OptionD: "",
     CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
-    Points: "", MediaURL: "", Passage: "", PassageTitle: "",
+    Points: "", Tags: "", Difficulty: "", MediaURL: "", Passage: "", PassageTitle: "",
   },
   // The last two rows share one passage — copy the cell down and it is shown once.
   {
     Question: "Following the sample above, analyse how enjambment works in the poem's closing lines. (Max 200 words.)",
     Type: "short", OptionA: "", OptionB: "", OptionC: "", OptionD: "",
     CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
-    Points: 5, MediaURL: "", Passage: SAMPLE_RESPONSE, PassageTitle: "Sample response — write yours like this",
+    Points: 5, Tags: "Skill: Close reading; Genre: Poetry; Period: Victorian", Difficulty: 4, MediaURL: "", Passage: SAMPLE_RESPONSE, PassageTitle: "Sample response — write yours like this",
   },
   {
     Question: "Which part of the sample answer above is the claim, as opposed to the evidence?",
@@ -135,7 +137,7 @@ const TEMPLATE_ROWS = [
     FeedbackB: "Correct: it is the reading being argued for, which the quotation is there to support.",
     FeedbackC: "Naming the poet is context, not an argument about the text.",
     FeedbackD: "That is advice about structure rather than a claim about the poem.",
-    Points: 1, MediaURL: "", Passage: SAMPLE_RESPONSE, PassageTitle: "Sample response — write yours like this",
+    Points: 1, Tags: "Skill: Critical terminology; Genre: Criticism", Difficulty: 3, MediaURL: "", Passage: SAMPLE_RESPONSE, PassageTitle: "Sample response — write yours like this",
   },
 ];
 
@@ -173,13 +175,16 @@ export default function NewQuizPage() {
   const [shuffleOptions, setShuffleOptions] = useState(true);
   const [timerMode, setTimerMode] = useState<TimerMode>("none");
   const [examMode, setExamMode] = useState(false);
+  const [mstMode, setMstMode] = useState(false);
+  const [mst, setMst] = useState<MstConfig>(DEFAULT_MST);
+  const [preset, setPreset] = useState<string>("");
   /**
    * The palette lets students roam the paper, which is precisely what the
    * per-question countdown exists to prevent. Deriving the timer rather than
    * resetting it on toggle means the two can never disagree — and a teacher who
    * turns exam mode back off gets their countdown back untouched.
    */
-  const effectiveTimerMode: TimerMode = examMode && timerMode === "question" ? "none" : timerMode;
+  const effectiveTimerMode: TimerMode = (examMode || mstMode) && timerMode === "question" ? "none" : timerMode;
   const [maxMinutes, setMaxMinutes] = useState("15");
   const [perQuestionSeconds, setPerQuestionSeconds] = useState("45");
   const [closesAt, setClosesAt] = useState("");
@@ -325,7 +330,7 @@ export default function NewQuizPage() {
   }
 
   async function copyPrompt() {
-    await navigator.clipboard.writeText(AI_PROMPT);
+    await navigator.clipboard.writeText(aiPrompt(preset || null));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -347,6 +352,8 @@ export default function NewQuizPage() {
       peer,
       timerMode: effectiveTimerMode,
       examMode,
+      mstMode,
+      mst: mstMode ? mst : undefined,
       maxMinutes: effectiveTimerMode === "quiz" ? Number(maxMinutes) : undefined,
       perQuestionSeconds: effectiveTimerMode === "question" ? Number(perQuestionSeconds) : undefined,
       closesAt: closesAt ? new Date(closesAt).toISOString() : undefined,
@@ -367,6 +374,7 @@ export default function NewQuizPage() {
             title: draft.title,
             description: draft.description,
             introMedia,
+            preset: preset || undefined,
             questions: draft.questions,
             theme,
             // Scored vs survey is a property of the questions, so it travels per quiz.
@@ -460,6 +468,26 @@ export default function NewQuizPage() {
               Already built quizzes for Google Forms? Upload the Apps Script file (.gs or .js) as it is — every form it
               builds becomes a quiz here. A workbook with several sheets works the same way: one quiz per sheet.
             </p>
+            <div className="mt-3 rounded-lg border border-blue-200 bg-white p-3">
+              <label className="block text-sm font-semibold text-blue-900">
+                Tag vocabulary
+                <select
+                  value={preset}
+                  onChange={(e) => setPreset(e.target.value)}
+                  className="ml-2 rounded-lg border border-blue-300 px-2 py-1.5 text-sm font-normal text-slate-900"
+                >
+                  <option value="">No fixed list</option>
+                  {TAG_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </label>
+              <p className="mt-2 text-xs text-blue-800">
+                {preset
+                  ? "The prompt below now names this list, so the AI tags every question with the same words each time. Consistent spelling is what lets the strengths and weaknesses report pool five quizzes into one picture — two spellings of one topic split it into two buckets too small to read."
+                  : "Pick a list and it is written into the prompt below, so the AI tags your questions with the same words every time. Without one you can still tag freely, but you will have to keep the spellings consistent yourself."}
+              </p>
+            </div>
             <div className="mt-3 flex flex-wrap gap-2">
               <button onClick={copyPrompt} className="rounded-lg bg-blue-700 px-4 py-2 text-sm text-white font-semibold hover:bg-blue-800">
                 {copied ? "Copied ✓" : "Copy AI prompt"}
@@ -472,7 +500,7 @@ export default function NewQuizPage() {
               </button>
             </div>
             {showPrompt && (
-              <pre className="mt-3 max-h-72 overflow-auto rounded-lg bg-white border border-blue-200 p-3 text-xs whitespace-pre-wrap text-slate-700">{AI_PROMPT}</pre>
+              <pre className="mt-3 max-h-72 overflow-auto rounded-lg bg-white border border-blue-200 p-3 text-xs whitespace-pre-wrap text-slate-700">{aiPrompt(preset || null)}</pre>
             )}
             <details className="mt-3">
               <summary className="cursor-pointer text-sm font-semibold text-blue-800">What can go in the Type column?</summary>
@@ -751,6 +779,18 @@ export default function NewQuizPage() {
                                       {scored ? `${qn.points} pt` : "not scored"}
                                     </p>
                                     <p className="mt-1.5 font-medium text-slate-900">{qn.text}</p>
+                                    {(qn.tags?.length || qn.difficulty !== undefined) && (
+                                      <div className="mt-1.5 flex flex-wrap gap-1">
+                                        {qn.difficulty !== undefined && (
+                                          <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[11px] font-semibold text-white">
+                                            {qn.difficulty} · {difficultyLabel(qn.difficulty)}
+                                          </span>
+                                        )}
+                                        {qn.tags?.map((t) => (
+                                          <span key={t} className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">{t}</span>
+                                        ))}
+                                      </div>
+                                    )}
                                     <Media url={qn.media} compact />
                                     {qn.type === "mcq" || qn.type === "multi" ? (
                                       <>
@@ -1055,16 +1095,175 @@ export default function NewQuizPage() {
           </div>
 
           <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+            <label className="flex items-start gap-2.5 text-sm">
+              <input
+                type="checkbox"
+                checked={mstMode}
+                onChange={(e) => setMstMode(e.target.checked)}
+                className="mt-0.5 w-4 h-4"
+              />
+              <span>
+                <span className="font-semibold text-slate-900">Adaptive paper (multistage)</span>
+                <span className="mt-1 block text-xs text-slate-500">
+                  The paper is dealt in sections rather than all at once. Everyone sits the same first section;
+                  each section after it is drawn harder or easier according to how the last one went, so one
+                  bank of questions gives a stronger and a weaker student a paper pitched at each of them.
+                  Students move freely inside a section but cannot return to one they have finished. Combine it
+                  with Exam Interface mode for a full rehearsal. Needs a Difficulty on your questions.
+                </span>
+              </span>
+            </label>
+
+            {mstMode && (
+              <div className="space-y-3 border-t border-slate-200 pt-3">
+                <div className="flex flex-wrap gap-4 text-sm text-slate-700">
+                  <label>
+                    Sections:{" "}
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={mst.stages}
+                      onChange={(e) => setMst({ ...mst, stages: Math.max(1, Number(e.target.value) || 1) })}
+                      className="ml-1 w-20 rounded-lg border border-slate-300 px-2 py-1.5"
+                    />
+                  </label>
+                  <label>
+                    Questions per section:{" "}
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={mst.perStage}
+                      onChange={(e) => setMst({ ...mst, perStage: Math.max(1, Number(e.target.value) || 1) })}
+                      className="ml-1 w-20 rounded-lg border border-slate-300 px-2 py-1.5"
+                    />
+                  </label>
+                  <label>
+                    Start at:{" "}
+                    <select
+                      value={mst.startDifficulty}
+                      onChange={(e) => setMst({ ...mst, startDifficulty: Number(e.target.value) })}
+                      className="ml-1 rounded-lg border border-slate-300 px-2 py-1.5"
+                    >
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <option key={n} value={n}>{n} — {difficultyLabel(n)}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <p className="text-xs text-slate-500">
+                  Each student sits {mst.stages * mst.perStage} of the questions in the file.
+                </p>
+
+                <div className="flex flex-wrap gap-4 text-sm text-slate-700">
+                  <label>
+                    Step up at or above:{" "}
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={mst.routeUpAt}
+                      onChange={(e) => setMst({ ...mst, routeUpAt: Number(e.target.value) || 0 })}
+                      className="ml-1 w-20 rounded-lg border border-slate-300 px-2 py-1.5"
+                    />%
+                  </label>
+                  <label>
+                    Step down at or below:{" "}
+                    <input
+                      type="number"
+                      min={0}
+                      max={99}
+                      value={mst.routeDownAt}
+                      onChange={(e) => setMst({ ...mst, routeDownAt: Number(e.target.value) || 0 })}
+                      className="ml-1 w-20 rounded-lg border border-slate-300 px-2 py-1.5"
+                    />%
+                  </label>
+                </div>
+                {mst.routeUpAt <= mst.routeDownAt && (
+                  <p className="text-xs text-amber-700">
+                    The step-up mark must be above the step-down mark, or a section would step both ways at
+                    once. It will be nudged up when you publish.
+                  </p>
+                )}
+
+                <div className="space-y-2 border-t border-slate-200 pt-3">
+                  <p className="text-sm font-semibold text-slate-900">Marks</p>
+                  <div className="flex flex-wrap gap-2 text-sm">
+                    {([["fixed", "Each question is worth what the file says"], ["byDifficulty", "Harder questions are worth more"]] as const).map(
+                      ([value, label]) => (
+                        <button
+                          key={value}
+                          onClick={() => setMst({ ...mst, scoring: value })}
+                          className={`rounded-lg px-4 py-2 font-medium ${mst.scoring === value ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
+                        >
+                          {label}
+                        </button>
+                      )
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {mst.scoring === "fixed"
+                      ? "Everyone is judged on the percentage of the paper they were actually given, which stays comparable however students were routed."
+                      : "A level 5 question is worth 5 marks and a level 1 is worth 1. Percentages stay comparable, but raw totals do not — two students who routed differently were marked out of different totals."}
+                  </p>
+                  <label className="flex items-start gap-2.5 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={mst.abilityScore}
+                      onChange={(e) => setMst({ ...mst, abilityScore: e.target.checked })}
+                      className="mt-0.5 w-4 h-4"
+                    />
+                    <span>
+                      <span className="font-semibold text-slate-900">Also report an ability estimate</span>
+                      <span className="mt-1 block text-xs text-slate-500">
+                        A single 0&ndash;100 figure placing the student on the difficulty scale itself, so that
+                        60% of very difficult questions is not read as the same achievement as 60% of very easy
+                        ones. It is the honest way to compare two students who sat different papers, and an easy
+                        number to over-read on its own — it is shown with its margin of error for that reason.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+
+                {(() => {
+                  const bank = selected.flatMap((d) => d.questions);
+                  if (!bank.length) return null;
+                  const capacity = mstCapacity(bank, mst);
+                  const thin = capacity.thinLevels.filter((l) => l.available === 0);
+                  return (
+                    <div className="space-y-1 border-t border-slate-200 pt-3 text-xs">
+                      <p className="text-slate-600">
+                        Your file holds {capacity.bank} questions; a student sits {Math.min(capacity.bank, capacity.wanted)}.
+                      </p>
+                      {capacity.warnings.map((w) => (
+                        <p key={w} className="text-amber-700">{w}</p>
+                      ))}
+                      {thin.length > 0 && (
+                        <p className="text-amber-700">
+                          Nothing at difficulty {thin.map((l) => l.difficulty).join(", ")} — a student routed there will be
+                          given the nearest level instead.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
             <p className="font-semibold text-slate-900 text-sm">Timer</p>
             <div className="flex flex-wrap gap-2 text-sm">
               {([["none", "No timer"], ["quiz", "Whole-quiz limit"], ["question", "Per-question countdown"]] as [TimerMode, string][]).map(([mode, label]) => {
-                const blocked = examMode && mode === "question";
+                const blocked = (examMode || mstMode) && mode === "question";
                 return (
                   <button
                     key={mode}
                     onClick={() => !blocked && setTimerMode(mode)}
                     disabled={blocked}
-                    title={blocked ? "Exam Interface mode uses a whole-paper timer." : undefined}
+                    title={blocked ? "This mode uses a whole-paper timer." : undefined}
                     className={`rounded-lg px-4 py-2 font-medium ${effectiveTimerMode === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"} ${blocked ? "opacity-40 cursor-not-allowed" : ""}`}
                   >
                     {label}
@@ -1072,10 +1271,10 @@ export default function NewQuizPage() {
                 );
               })}
             </div>
-            {examMode && (
+            {(examMode || mstMode) && (
               <p className="text-xs text-slate-500">
-                Exam Interface mode lets students move between questions, so it uses a whole-paper timer —
-                the per-question countdown is unavailable.
+                {mstMode ? "An adaptive paper" : "Exam Interface mode"} lets students move between questions, so it
+                uses a whole-paper timer — the per-question countdown is unavailable.
               </p>
             )}
             {effectiveTimerMode === "quiz" && (

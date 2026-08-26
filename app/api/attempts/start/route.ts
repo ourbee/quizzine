@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { genId, normName, normRoll, readSemester } from "@/lib/normalize";
+import { normalizeMstConfig, publicStage, startMst } from "@/lib/mst";
 import type { GroupInfo, Question, QuizSettings, StudentInfo } from "@/lib/types";
 
 export async function POST(req: NextRequest) {
@@ -119,11 +120,18 @@ export async function POST(req: NextRequest) {
   }
 
   const id = genId();
-  await q(`INSERT INTO attempts (id, quiz_id, student, group_info) VALUES ($1, $2, $3, $4)`, [
+  // An adaptive paper is dealt from the server: the first stage is drawn now and
+  // stored with the attempt, and the student is only ever sent the stage they
+  // are sitting. See lib/mst.ts.
+  const mstConfig = settings.mstMode ? normalizeMstConfig(settings.mst) : null;
+  const mstState = mstConfig ? startMst(quiz.questions as Question[], mstConfig) : null;
+
+  await q(`INSERT INTO attempts (id, quiz_id, student, group_info, mst) VALUES ($1, $2, $3, $4, $5)`, [
     id,
     quiz.id,
     JSON.stringify(student),
     group ? JSON.stringify(group) : null,
+    mstState ? JSON.stringify(mstState) : null,
   ]);
 
   const startedAt = Date.now();
@@ -138,5 +146,18 @@ export async function POST(req: NextRequest) {
     deadlineAt = deadlineAt ? Math.min(deadlineAt, closes) : undefined;
   }
 
-  return NextResponse.json({ attemptId: id, serverNow: startedAt, deadlineAt });
+  return NextResponse.json({
+    attemptId: id,
+    serverNow: startedAt,
+    deadlineAt,
+    ...(mstState && mstConfig
+      ? {
+          mst: {
+            stage: mstState.stage,
+            totalStages: mstConfig.stages,
+            questions: publicStage(quiz.questions as Question[], mstState),
+          },
+        }
+      : {}),
+  });
 }

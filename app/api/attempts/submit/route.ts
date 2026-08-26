@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { grade } from "@/lib/grade";
+import { abilityResponses, estimateAbility, normalizeMstConfig, servedQuestions, type MstState } from "@/lib/mst";
 import { isSurvey } from "@/lib/questions";
 import type { AttemptFlags, GroupInfo, PerQuestionResult, Question, QuizSettings, ReviewPayload, StudentInfo } from "@/lib/types";
 
@@ -27,6 +28,8 @@ export async function POST(req: NextRequest) {
     score: number | null;
     max_score: number | null;
     flags: AttemptFlags;
+    answers: Record<string, string> | null;
+    mst: MstState | null;
   }>(`SELECT * FROM attempts WHERE id = $1`, [body.attemptId]);
   if (!attempts.length) return NextResponse.json({ error: "Attempt not found." }, { status: 404 });
   const attempt = attempts[0];
@@ -37,7 +40,11 @@ export async function POST(req: NextRequest) {
   );
   if (!quizzes.length) return NextResponse.json({ error: "Quiz not found." }, { status: 404 });
   const quiz = quizzes[0];
-  const questions = quiz.questions as Question[];
+  const bank = quiz.questions as Question[];
+  // An adaptive paper is the questions this student was routed through, not the
+  // bank they were drawn from: marking, the total and the review all work on it.
+  const mstConfig = quiz.settings?.mstMode ? normalizeMstConfig(quiz.settings.mst) : null;
+  const questions = mstConfig ? servedQuestions(bank, attempt.mst, mstConfig) : bank;
   const survey = quiz.settings?.gradingMode === "survey" || isSurvey(questions);
   const peerReview = quiz.settings?.gradingMode === "peer";
 
@@ -58,11 +65,19 @@ export async function POST(req: NextRequest) {
       peerReview,
       flags: attempt.flags ?? {},
       submittedAt: attempt.submitted_at ?? new Date().toISOString(),
+      ability:
+        mstConfig?.abilityScore && !survey
+          ? estimateAbility(abilityResponses(questions, attempt.per_question))
+          : undefined,
     };
     return NextResponse.json(review);
   }
 
-  const answers: Record<string, string> = body.answers && typeof body.answers === "object" ? body.answers : {};
+  // The stage endpoint has been banking answers as each stage closed, so an
+  // adaptive paper submits what the server already holds rather than trusting a
+  // browser to send back stages it should no longer be able to change.
+  const posted: Record<string, string> = body.answers && typeof body.answers === "object" ? body.answers : {};
+  const answers: Record<string, string> = mstConfig ? { ...posted, ...(attempt.answers ?? {}) } : posted;
   const settings = quiz.settings;
   const { per, score, max, pending } = grade(questions, answers, settings.multiScoring ?? "exact");
 
@@ -98,6 +113,10 @@ export async function POST(req: NextRequest) {
     peerReview,
     flags,
     submittedAt,
+    ability:
+      mstConfig?.abilityScore && !survey
+        ? estimateAbility(abilityResponses(questions, per))
+        : undefined,
   };
   return NextResponse.json(review);
 }

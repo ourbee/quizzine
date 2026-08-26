@@ -47,6 +47,7 @@ interface PublicQuiz {
     perQuestionSeconds?: number;
     closesAt?: string;
     examMode?: boolean;
+    mstMode?: boolean;
     shuffleQuestions: boolean;
     shuffleOptions: boolean;
     allowMultiple: boolean;
@@ -56,7 +57,8 @@ interface PublicQuiz {
     multiScoring?: "exact" | "partial";
   };
   questionCount: number;
-  totalPoints: number;
+  totalPoints?: number;
+  mst?: { stages: number; perStage: number };
   survey: boolean;
   peerReview: boolean;
   phase: "responding" | "reviewing" | "closed";
@@ -103,6 +105,11 @@ export default function StudentQuizPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [review, setReview] = useState<ReviewPayload | null>(null);
+  // Adaptive papers arrive one stage at a time from the server; the bank never
+  // reaches the browser. See lib/mst.ts.
+  const [stageQuestions, setStageQuestions] = useState<PublicQuestion[] | null>(null);
+  const [stageNumber, setStageNumber] = useState(0);
+  const [totalStages, setTotalStages] = useState(0);
   const [rechecking, setRechecking] = useState(false);
   const [recheckedAt, setRecheckedAt] = useState(0);
 
@@ -151,6 +158,24 @@ export default function StudentQuizPage() {
           setIndex(active.index ?? 0);
           if (savedAns) setAnswers(JSON.parse(savedAns));
           setProgress(parseProgress(localStorage.getItem(examKey(active.attemptId))));
+          // The stage a reload landed in comes back from the server rather than
+          // from storage, so a cleared browser does not end the attempt.
+          if (data.settings.mstMode) {
+            const stage = await fetch(`/api/attempts/stage?attemptId=${encodeURIComponent(active.attemptId)}`, {
+              cache: "no-store",
+            });
+            if (stage.ok) {
+              const s = await stage.json();
+              if (s.done) {
+                setPhase("intro");
+                localStorage.removeItem(activeKey);
+                return;
+              }
+              setStageQuestions(s.questions ?? []);
+              setStageNumber(s.stage ?? 0);
+              setTotalStages(s.totalStages ?? 0);
+            }
+          }
           setPhase("taking");
           return;
         } catch {}
@@ -223,16 +248,20 @@ export default function StudentQuizPage() {
   const perQuestionMode =
     !examMode && quiz?.settings.timerMode === "question" && !!quiz.settings.perQuestionSeconds;
 
+  const mstMode = !!quiz?.settings.mstMode;
+
   const ordered = useMemo(() => {
     if (!quiz || !attempt) return quiz?.questions ?? [];
     const seed = hashSeed(attempt.attemptId);
-    let qs = quiz.questions;
-    if (quiz.settings.shuffleQuestions) qs = shuffleWithinPassageGroups(qs, seed);
+    // The server has already chosen this stage and its order; reshuffling here
+    // would undo the routing that put these questions in front of this student.
+    let qs = mstMode ? (stageQuestions ?? []) : quiz.questions;
+    if (!mstMode && quiz.settings.shuffleQuestions) qs = shuffleWithinPassageGroups(qs, seed);
     if (quiz.settings.shuffleOptions) {
       qs = qs.map((qn, i) => ({ ...qn, options: seededShuffle(qn.options, seed + i + 1) }));
     }
     return qs;
-  }, [quiz, attempt]);
+  }, [quiz, attempt, mstMode, stageQuestions]);
 
   // Landing on a question is what turns its palette tile from grey to red — the
   // student has now seen it and chosen to leave it, which is different from
@@ -282,6 +311,53 @@ export default function StudentQuizPage() {
     }
   }, [attempt, answers, activeKey, reviewKey]);
 
+  /**
+   * Close the stage on screen. The server marks it, decides where the student
+   * goes next and hands back that stage; when the paper is spent it says so and
+   * the ordinary submit takes over. The answers to a closed stage stay in the
+   * record but can no longer be changed, which is the one-way boundary the
+   * whole design turns on.
+   */
+  const nextStage = useCallback(async () => {
+    if (!attempt || submittingRef.current) return;
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      const stageAnswers: Record<string, string> = {};
+      for (const qn of ordered) {
+        if (answers[qn.id] !== undefined) stageAnswers[qn.id] = answers[qn.id];
+      }
+      const res = await fetch("/api/attempts/stage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attemptId: attempt.attemptId, answers: stageAnswers }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Could not save this section (${res.status})`);
+      if (data.done) {
+        setSubmitting(false);
+        await submit();
+        return;
+      }
+      setStageQuestions(data.questions ?? []);
+      setStageNumber(data.stage ?? 0);
+      setTotalStages(data.totalStages ?? totalStages);
+      // A new stage is a fresh palette: nothing in it has been visited or flagged.
+      setProgress(emptyProgress());
+      setIndex(0);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Could not save this section — check your connection and try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [attempt, answers, ordered, totalStages, submit]);
+
+  /** What the Submit button does: move on a stage, or finish the paper. */
+  const finishOrAdvance = useCallback(() => {
+    if (mstMode) return nextStage();
+    return submit();
+  }, [mstMode, nextStage, submit]);
+
   // ------- deadline auto-submit / per-question auto-advance -------
   useEffect(() => {
     if (phase !== "taking") return;
@@ -326,6 +402,11 @@ export default function StudentQuizPage() {
     setAnswers({});
     setProgress(emptyProgress());
     setIndex(0);
+    if (data.mst) {
+      setStageQuestions(data.mst.questions ?? []);
+      setStageNumber(data.mst.stage ?? 0);
+      setTotalStages(data.mst.totalStages ?? 0);
+    }
     localStorage.setItem(activeKey, JSON.stringify(active));
     setPhase("taking");
   }
@@ -385,6 +466,21 @@ export default function StudentQuizPage() {
                   {pct}%{review.pending > 0 && ` · ${review.pending} answer${review.pending === 1 ? "" : "s"} awaiting teacher review`}
                   {review.flags.late && " · submitted late"}
                 </p>
+                {review.ability && (
+                  <p className="mt-2 text-sm" style={{ color: theme.muted }}>
+                    Ability estimate{" "}
+                    <span className="font-bold" style={{ color: theme.accent }}>{review.ability.scaled}</span>
+                    /100
+                    {review.ability.extreme
+                      ? " — every answer went one way, so this is the edge of what these questions can measure rather than a precise figure."
+                      : review.ability.se >= 0.6
+                        ? " — from a short paper, so read it loosely."
+                        : ""}
+                    <span className="mt-1 block text-xs">
+                      This places you on the difficulty scale itself, so it does not reward an easier paper.
+                    </span>
+                  </p>
+                )}
               </>
             )}
             <p className="mt-1 text-xs" style={{ color: theme.muted }}>Submitted {new Date(review.submittedAt).toLocaleString()}</p>
@@ -595,8 +691,20 @@ export default function StudentQuizPage() {
             <ul className="mt-4 text-sm space-y-1" style={{ color: theme.muted }}>
               <li>
                 • {quiz.questionCount} questions
-                {quiz.peerReview ? " · marked by your classmates" : quiz.survey ? " · not scored" : ` · ${quiz.totalPoints} points`}
+                {quiz.peerReview
+                  ? " · marked by your classmates"
+                  : quiz.survey
+                    ? " · not scored"
+                    : quiz.totalPoints !== undefined
+                      ? ` · ${quiz.totalPoints} points`
+                      : ""}
               </li>
+              {quiz.mst && (
+                <li>
+                  • This paper comes in {quiz.mst.stages} sections of {quiz.mst.perStage}. Each section is chosen from how the
+                  one before it went, so once you finish a section you cannot go back to it.
+                </li>
+              )}
               {quiz.peerReview ? (
                 <li>• Nothing is marked as you answer — classmates review your work afterwards, anonymously both ways.</li>
               ) : (
@@ -926,7 +1034,12 @@ export default function StudentQuizPage() {
             return { ...p, marked: next };
           })
         }
-        onSubmit={submit}
+        onSubmit={finishOrAdvance}
+        stage={
+          mstMode && totalStages
+            ? { number: stageNumber + 1, total: totalStages, last: stageNumber + 1 >= totalStages }
+            : undefined
+        }
       />
     );
   }
@@ -937,6 +1050,11 @@ export default function StudentQuizPage() {
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-3 text-sm">
           <p className="font-semibold truncate">{quiz.title}</p>
           <div className="flex items-center gap-3 shrink-0">
+            {mstMode && totalStages > 0 && (
+              <span className="font-semibold" style={{ color: theme.muted }}>
+                Section {stageNumber + 1}/{totalStages}
+              </span>
+            )}
             <span style={{ color: theme.muted }}>{answered}/{ordered.length} answered</span>
             {perQuestionMode && qDeadline && (
               <span className={`font-mono font-bold ${qDeadline - now < 10_000 ? "text-red-600" : ""}`}>{fmtClock(qDeadline - now)}</span>
@@ -977,8 +1095,26 @@ export default function StudentQuizPage() {
                   ? `${ordered.length - answered} question${ordered.length - answered === 1 ? "" : "s"} unanswered.`
                   : "All questions answered."}
               </p>
-              <button onClick={submit} disabled={submitting} className="mt-3 rounded-lg px-8 py-3 font-semibold disabled:opacity-50" style={accentBtn}>
-                {submitting ? "Submitting…" : quiz.survey ? "Submit responses" : "Submit quiz"}
+              {mstMode && stageNumber + 1 < totalStages && (
+                <p className="mt-2 text-xs" style={{ color: theme.muted }}>
+                  The next section is chosen from how this one goes, so you cannot come back to these questions.
+                </p>
+              )}
+              <button
+                onClick={finishOrAdvance}
+                disabled={submitting}
+                className="mt-3 rounded-lg px-8 py-3 font-semibold disabled:opacity-50"
+                style={accentBtn}
+              >
+                {submitting
+                  ? mstMode && stageNumber + 1 < totalStages
+                    ? "Saving…"
+                    : "Submitting…"
+                  : mstMode && stageNumber + 1 < totalStages
+                    ? "Finish section →"
+                    : quiz.survey
+                      ? "Submit responses"
+                      : "Submit quiz"}
               </button>
             </div>
           </>
