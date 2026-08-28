@@ -8,6 +8,8 @@ import { q } from "@/lib/db";
 import { currentTeacher } from "@/lib/auth";
 import { DEFAULT_ANALYTICS, buildAnalytics, type AnalyticsAttempt, type AnalyticsOptions, type AnalyticsQuiz } from "@/lib/analytics";
 import { isChoice, isGraded } from "@/lib/questions";
+import { normalizeMarking } from "@/lib/marking";
+import { normalizeRubricConfig } from "@/lib/rubric";
 import type { AliasMap } from "@/lib/report";
 import type { Question, QuizSettings } from "@/lib/types";
 
@@ -55,19 +57,25 @@ export async function POST(req: NextRequest) {
       difficulty: qn.difficulty,
       points: qn.points,
       graded: isGraded(qn),
-      // Typed answers are marked as a whole attempt, so they carry no
-      // per-question result to attribute to a tag.
+      // Choice questions carry a per-question result the moment they are
+      // submitted; a written answer gets one when a reviewer marks it.
       autoMarked: isChoice(qn),
+      rubricWeights: qn.rubricWeights,
     })),
+    rubric: z.settings?.rubric ? normalizeRubricConfig(z.settings.rubric) : null,
   }));
 
-  const attempts = await q<AnalyticsAttempt>(
-    `SELECT id, quiz_id, student, group_info, per_question, score, max_score, submitted_at
+  const attemptRows = await q<AnalyticsAttempt>(
+    `SELECT id, quiz_id, student, group_info, per_question, score, max_score, submitted_at, marking
        FROM attempts
       WHERE quiz_id = ANY($1::text[]) AND status = 'submitted'
       ORDER BY submitted_at ASC`,
     [rows.map((z) => z.id)]
   );
+  const attempts: AnalyticsAttempt[] = attemptRows.map((a) => ({
+    ...a,
+    marking: a.marking ? normalizeMarking(a.marking) : null,
+  }));
 
   const aliasRows = await q<{ variant_roll: string; canonical_roll: string }>(
     `SELECT variant_roll, canonical_roll FROM roll_aliases WHERE owner = $1`,

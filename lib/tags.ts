@@ -470,3 +470,106 @@ export function applyTagMerges(tags: string[], merges: Record<string, string>): 
     })
   );
 }
+
+// ---------- ingest ----------
+
+/**
+ * Tag hygiene at the door.
+ *
+ * A vocabulary is the exact spellings a teacher already uses. Incoming tags are
+ * matched against it on the bucket key — casefolded, whitespace collapsed,
+ * punctuation-insensitive per side of the `Dimension: Value` split — and where
+ * one matches, THE EXISTING SPELLING IS STORED. The vocabulary always wins, so
+ * "Unit 7 Cultural Studies" arriving beside an established "Unit 7 Cultural
+ * studies" is quietly adopted into it rather than founding a second bucket.
+ *
+ * This kills every pure case, spacing and punctuation split at ingest. What it
+ * deliberately does not do is merge wording variants — "Unit 9 Literary theory
+ * post World War II" against "Unit 9 Literary Theory (Post World War II)" is a
+ * judgement, not a normalisation, so it is surfaced as a suggestion instead
+ * (`tagNearMisses`) and only a teacher's click applies it.
+ */
+export interface TagVocabulary {
+  /** bucket key → the exact spelling already in use. */
+  byKey: Map<string, string>;
+  /** looser key (punctuation and plurals dropped) → the exact spellings using it. */
+  byLoose: Map<string, string[]>;
+  tags: string[];
+}
+
+export function buildVocabulary(tags: Iterable<string>): TagVocabulary {
+  const byKey = new Map<string, string>();
+  const byLoose = new Map<string, string[]>();
+  const list: string[] = [];
+  for (const raw of tags) {
+    const parsed = parseTag(String(raw ?? ""));
+    if (!parsed) continue;
+    const stored = formatTag(parsed);
+    const key = tagKey(parsed);
+    if (!byKey.has(key)) {
+      byKey.set(key, stored);
+      list.push(stored);
+    }
+    const loose = looseKey(parsed);
+    const existing = byLoose.get(loose) ?? [];
+    if (!existing.includes(byKey.get(key)!)) byLoose.set(loose, [...existing, byKey.get(key)!]);
+  }
+  return { byKey, byLoose, tags: list };
+}
+
+/** Rewrite a question's tags into the vocabulary's own spellings where they match. */
+export function canonicalizeTags(tags: string[], vocab: TagVocabulary): string[] {
+  return normalizeTags(
+    tags.map((t) => {
+      const parsed = parseTag(t);
+      if (!parsed) return t;
+      return vocab.byKey.get(tagKey(parsed)) ?? t;
+    })
+  );
+}
+
+export interface TagNearMiss {
+  /** The incoming spelling, as it would be stored. */
+  incoming: string;
+  /** The established spelling it is probably a variant of. */
+  existing: string;
+}
+
+/**
+ * Wording-level variants that canonicalisation cannot safely fold on its own:
+ * same dimension, values that agree once punctuation and a trailing plural are
+ * ignored, or that differ by a single typo. Suggestions for the upload preview,
+ * never applied without a click.
+ */
+export function tagNearMisses(tags: Iterable<string>, vocab: TagVocabulary): TagNearMiss[] {
+  const out: TagNearMiss[] = [];
+  const seen = new Set<string>();
+  for (const raw of tags) {
+    const parsed = parseTag(String(raw ?? ""));
+    if (!parsed) continue;
+    if (loose(parsed.dimension) === loose(DIFFICULTY_DIMENSION)) continue;
+    const stored = formatTag(parsed);
+    // Already an exact bucket match: canonicalisation has it, nothing to ask.
+    if (vocab.byKey.has(tagKey(parsed))) continue;
+    if (seen.has(stored)) continue;
+
+    const candidates = vocab.byLoose.get(looseKey(parsed)) ?? [];
+    let existing = candidates[0];
+    if (!existing) {
+      // One typo apart, the way "Victorain" is one typo from "Victorian".
+      const [dim, value] = looseKey(parsed).split("|");
+      for (const [key, spellings] of vocab.byLoose) {
+        const [otherDim, otherValue] = key.split("|");
+        if (otherDim !== dim) continue;
+        if (Math.min(value.length, otherValue.length) < 4) continue;
+        if (editDistance(value, otherValue) !== 1) continue;
+        existing = spellings[0];
+        break;
+      }
+    }
+    if (!existing || existing === stored) continue;
+    seen.add(stored);
+    out.push({ incoming: stored, existing });
+  }
+  return out;
+}

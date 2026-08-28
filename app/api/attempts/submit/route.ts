@@ -8,6 +8,7 @@ import { q } from "@/lib/db";
 import { grade } from "@/lib/grade";
 import { abilityResponses, estimateAbility, normalizeMstConfig, servedQuestions, type MstState } from "@/lib/mst";
 import { isSurvey } from "@/lib/questions";
+import { normalizeTelemetry } from "@/lib/telemetry";
 import type { AttemptFlags, GroupInfo, PerQuestionResult, Question, QuizSettings, ReviewPayload, StudentInfo } from "@/lib/types";
 
 const GRACE_MS = 45_000; // network/clock grace before a submission is flagged late
@@ -45,7 +46,12 @@ export async function POST(req: NextRequest) {
   // bank they were drawn from: marking, the total and the review all work on it.
   const mstConfig = quiz.settings?.mstMode ? normalizeMstConfig(quiz.settings.mst) : null;
   const questions = mstConfig ? servedQuestions(bank, attempt.mst, mstConfig) : bank;
-  const survey = quiz.settings?.gradingMode === "survey" || isSurvey(questions);
+  const rubricMode = quiz.settings?.gradingMode === "rubric";
+  // A rubric-marked quiz shows "response recorded" at submission for the same
+  // reason a peer-reviewed one does: the marks do not exist yet, and rubric
+  // feedback quotes the model answer, which must not reach a browser while
+  // classmates are still writing.
+  const survey = quiz.settings?.gradingMode === "survey" || rubricMode || isSurvey(questions);
   const peerReview = quiz.settings?.gradingMode === "peer";
 
   // Idempotent: a second submit (double-click, refresh) returns the stored result.
@@ -63,6 +69,7 @@ export async function POST(req: NextRequest) {
       pending,
       survey,
       peerReview,
+      rubricMode,
       flags: attempt.flags ?? {},
       submittedAt: attempt.submitted_at ?? new Date().toISOString(),
       ability:
@@ -90,13 +97,27 @@ export async function POST(req: NextRequest) {
   if (deadline && now > deadline + GRACE_MS) flags.late = true;
   if (settings.closesAt && now > new Date(settings.closesAt).getTime() + GRACE_MS) flags.late = true;
 
+  // Counts only — how the answer was typed, never a character of what was
+  // typed or pasted. Disclosed to the student on the intro screen. See
+  // lib/telemetry.ts for why there is no verdict attached to it.
+  const telemetry = normalizeTelemetry(body.telemetry);
+
   const submittedAt = new Date().toISOString();
   await q(
     `UPDATE attempts
         SET answers = $1, per_question = $2, score = $3, max_score = $4,
-            flags = $5, status = 'submitted', submitted_at = $6
-      WHERE id = $7`,
-    [JSON.stringify(answers), JSON.stringify(per), score, max, JSON.stringify(flags), submittedAt, attempt.id]
+            flags = $5, status = 'submitted', submitted_at = $6, telemetry = $7
+      WHERE id = $8`,
+    [
+      JSON.stringify(answers),
+      JSON.stringify(per),
+      score,
+      max,
+      JSON.stringify(flags),
+      submittedAt,
+      JSON.stringify(telemetry),
+      attempt.id,
+    ]
   );
 
   const review: ReviewPayload = {
@@ -111,6 +132,7 @@ export async function POST(req: NextRequest) {
     pending,
     survey,
     peerReview,
+    rubricMode,
     flags,
     submittedAt,
     ability:

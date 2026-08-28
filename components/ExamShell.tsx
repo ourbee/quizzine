@@ -16,8 +16,10 @@ import {
   type ExamStatus,
 } from "@/lib/examstate";
 import { joinKeys, splitKeys } from "@/lib/questions";
+import type { TelemetryCollector } from "@/lib/telemetry";
 import Material from "@/components/Material";
 import Media from "@/components/Media";
+import WrittenAnswer from "@/components/WrittenAnswer";
 
 interface ShellOption { key: string; text: string }
 export interface ShellQuestion {
@@ -29,11 +31,17 @@ export interface ShellQuestion {
   media?: string;
   points: number;
   graded: boolean;
+  wordLimit?: number;
   options: ShellOption[];
 }
 
 interface Props {
   questions: ShellQuestion[];
+  /** Keys the per-question draft in localStorage; see the note on `draft`. */
+  attemptId: string;
+  pasteGuard?: boolean;
+  hardWordLimit?: boolean;
+  telemetry?: TelemetryCollector;
   /** Saved answers only — a pending choice lives in this component, not here. */
   answers: Record<string, string>;
   progress: ExamProgress;
@@ -110,6 +118,10 @@ function StatusTile({
 
 export default function ExamShell({
   questions,
+  attemptId,
+  pasteGuard,
+  hardWordLimit,
+  telemetry,
   answers,
   progress,
   index,
@@ -137,14 +149,58 @@ export default function ExamShell({
   const [confirming, setConfirming] = useState(false);
   const paneRef = useRef<HTMLDivElement>(null);
 
-  // Arriving at a question shows its saved answer, if it has one, and nothing else.
+  const draftKey = (qid: string) => `qz-exam-draft-${attemptId}-${qid}`;
+
+  /**
+   * Arriving at a question shows its saved answer — or, for a written one, the
+   * uncommitted text a reload interrupted. "Counts only once saved" is the exam
+   * semantics being rehearsed for multiple choice, and it stays; on twenty
+   * minutes of typing it is not a rehearsal, it is a data-loss bug, so a
+   * written draft survives a reload and is committed on navigation below.
+   */
   useEffect(() => {
-    setDraft(answers[question?.id] ?? "");
+    if (!question) return;
+    const saved = answers[question.id] ?? "";
+    if (question.type === "short" || question.type === "essay") {
+      let restored = "";
+      try {
+        restored = localStorage.getItem(draftKey(question.id)) ?? "";
+      } catch {}
+      setDraft(restored.trim() ? restored : saved);
+    } else {
+      setDraft(saved);
+    }
     paneRef.current?.scrollTo({ top: 0 });
     // Deliberately keyed on the question alone: re-running when `answers` changes
     // would let a save further up the page overwrite what is being typed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [question?.id]);
+
+  // Debounced local draft, so a crash or a reload costs a couple of seconds of
+  // typing rather than the whole answer.
+  useEffect(() => {
+    if (!question || (question.type !== "short" && question.type !== "essay")) return;
+    const qid = question.id;
+    const text = draft;
+    const t = setTimeout(() => {
+      try {
+        if (text.trim()) localStorage.setItem(draftKey(qid), text);
+        else localStorage.removeItem(draftKey(qid));
+      } catch {}
+    }, 2000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, question?.id, attemptId]);
+
+  // Leaving the tab with typed-but-uncommitted text is worth a warning; the
+  // browser's own dialog is the only one that fires reliably here.
+  useEffect(() => {
+    if (!question || (question.type !== "short" && question.type !== "essay")) return;
+    if (draft.trim() === (answers[question.id] ?? "").trim()) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [draft, answers, question]);
 
   const qids = useMemo(() => questions.map((q) => q.id), [questions]);
   const counts = countStatuses(qids, answers, progress);
@@ -153,7 +209,25 @@ export default function ExamShell({
   if (!question) return null;
 
   const isLast = index >= questions.length - 1;
+  const written = question.type === "short" || question.type === "essay";
+
+  /**
+   * Moving away from a written answer commits it. Discarding a typed paragraph
+   * because the student pressed NEXT instead of Save is not exam realism, it is
+   * a foot-gun — the real paper does not delete your handwriting when you turn
+   * the page. Multiple choice keeps the save-or-lose rule exactly as it was.
+   */
+  const commitWritten = () => {
+    if (!written) return;
+    if (draft.trim() === (answers[question.id] ?? "").trim()) return;
+    onSaveAnswer(question.id, draft);
+    try {
+      localStorage.removeItem(draftKey(question.id));
+    } catch {}
+  };
+
   const go = (to: number) => {
+    commitWritten();
     setPaletteOpen(false);
     onIndexChange(Math.max(0, Math.min(questions.length - 1, to)));
   };
@@ -162,6 +236,9 @@ export default function ExamShell({
   const saveAndNext = () => {
     onSaveAnswer(question.id, draft);
     onSetMarked(question.id, false);
+    try {
+      localStorage.removeItem(draftKey(question.id));
+    } catch {}
     if (!isLast) go(index + 1);
   };
   const clear = () => setDraft("");
@@ -181,7 +258,9 @@ export default function ExamShell({
   };
 
   const choice = question.type === "mcq" || question.type === "multi";
-  const unsaved = draft.trim() !== (answers[question.id] ?? "").trim();
+  // Only a choice can actually be lost now — a written answer is committed the
+  // moment the student leaves the question.
+  const unsaved = choice && draft.trim() !== (answers[question.id] ?? "").trim();
 
   const legend = (
     <div className="grid grid-cols-1 gap-2.5 border border-dashed border-slate-400 p-3 sm:grid-cols-2">
@@ -308,11 +387,15 @@ export default function ExamShell({
                 </ol>
               </>
             ) : (
-              <textarea
+              <WrittenAnswer
+                qid={question.id}
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                onChange={setDraft}
                 rows={question.type === "essay" ? 10 : 4}
-                placeholder="Type your answer…"
+                wordLimit={question.wordLimit}
+                hardLimit={hardWordLimit}
+                pasteGuard={pasteGuard}
+                telemetry={telemetry}
                 className="mt-4 w-full rounded border border-slate-400 px-3 py-2 text-[15px] focus:border-sky-500 focus:outline-none"
               />
             )}
@@ -361,7 +444,10 @@ export default function ExamShell({
               </div>
               <button
                 type="button"
-                onClick={() => setConfirming(true)}
+                onClick={() => {
+                  commitWritten();
+                  setConfirming(true);
+                }}
                 disabled={submitting}
                 className="rounded bg-green-600 px-5 py-2 text-xs font-bold uppercase text-white hover:bg-green-700 disabled:opacity-50"
               >

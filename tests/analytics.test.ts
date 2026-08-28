@@ -414,3 +414,70 @@ test("rows group into dimensions for display", () => {
     ["Genre", "Period"]
   );
 });
+
+test("a marked written answer joins the report instead of being unanalysable", () => {
+  const quizzes: AnalyticsQuiz[] = [
+    {
+      id: "z1",
+      title: "z1",
+      created_at: "2026-07-01T10:00:00Z",
+      questions: [
+        question("q1", ["Genre: Poetry"]),
+        { id: "q2", text: "Discuss", tags: ["Genre: Poetry"], points: 10, graded: true, autoMarked: false },
+      ],
+      rubric: {
+        bands: [
+          {
+            id: "a",
+            label: "Content",
+            params: [
+              { id: "a1", label: "Correctness", weight: 60 },
+              { id: "a2", label: "Evidence", weight: 40 },
+            ],
+          },
+        ],
+      },
+    },
+  ];
+  // The essay has been marked at 70%, so it carries a real per-question result.
+  const per: PerQuestionResult[] = [
+    { qid: "q1", correct: true, awarded: 1, pending: false },
+    { qid: "q2", answer: "an essay", correct: false, awarded: 7, pending: false },
+  ];
+  const result = buildAnalytics(
+    quizzes,
+    [
+      {
+        ...attempt("z1", "101", 0, 0),
+        per_question: per,
+        score: 8,
+        max_score: 11,
+        marking: {
+          q2: {
+            teacher: { params: { a1: 48, a2: 22 }, percent: 70, at: "2026-08-28T00:00:00.000Z" },
+          },
+        },
+      },
+    ],
+    opts()
+  );
+
+  const row = result.students[0].rows[0];
+  assert.equal(row.attempted, 2, "the marked essay now counts towards the topic");
+  assert.equal(row.awarded, 8);
+  assert.equal(row.possible, 11);
+  assert.equal(result.unanalysableQuestions, 0, "nothing is waiting to be marked any more");
+
+  // And the rubric itself becomes a dimension of its own.
+  const byId = Object.fromEntries(result.rubricRows.map((r) => [`${r.kind}:${r.id}`, r]));
+  assert.equal(byId["band:a"].percent, 70);
+  assert.equal(byId["param:a1"].percent, 80); // 48 of 60
+  assert.equal(byId["param:a2"].percent, 55); // 22 of 40
+  assert.equal(byId["band:a"].students, 1);
+});
+
+test("with nothing marked there are no rubric rows to read", () => {
+  const quizzes = [quiz("z1", "2026-07-01T10:00:00Z", ["Genre: Poetry"], 5)];
+  const result = buildAnalytics(quizzes, [attempt("z1", "101", 5, 3)], opts());
+  assert.deepEqual(result.rubricRows, []);
+});

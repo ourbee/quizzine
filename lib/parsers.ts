@@ -78,10 +78,14 @@ export function parseSheetRows(rows: Record<string, unknown>[]): ParsedQuiz {
       correct: get("correctanswer", "correct", "answer", "key", "correctanswers", "answers"),
       graded: get("graded", "scored", "marked", "hascorrectanswer"),
       points: get("points", "marks", "score"),
-      feedbackCorrect: get("feedbackcorrect", "correctfeedback"),
+      // ModelAnswer is an alias, not a new field: FeedbackCorrect has always
+      // been the model answer on a written question, and a teacher writing one
+      // should not have to know that.
+      feedbackCorrect: get("feedbackcorrect", "correctfeedback", "modelanswer", "sampleanswer", "expectedanswer"),
       feedbackIncorrect: get("feedbackincorrect", "feedbackwrong", "incorrectfeedback"),
       tags: get("tags", "tag", "categories", "category", "labels"),
       difficulty: get("difficulty", "level", "difficultylevel"),
+      wordLimit: get("wordlimit", "words", "maxwords", "wordcount"),
     };
     // Dimensions may also arrive as columns of their own — a Period column beside
     // a Genre column is how a teacher naturally lays a sheet out, and reads the
@@ -187,10 +191,14 @@ export function parseJsonText(text: string): ParsedQuiz {
       correct: readCorrect(item),
       graded: item.graded as string | boolean | undefined,
       points: item.points as number | undefined,
-      feedbackCorrect: item.feedbackCorrect !== undefined ? String(item.feedbackCorrect) : undefined,
+      feedbackCorrect: (() => {
+        const value = item.feedbackCorrect ?? item.modelAnswer ?? item.modelanswer ?? item.sampleAnswer;
+        return value !== undefined ? String(value) : undefined;
+      })(),
       feedbackIncorrect: item.feedbackIncorrect !== undefined ? String(item.feedbackIncorrect) : undefined,
       tags: readTags(item),
       difficulty: (item.difficulty ?? item.level) as string | number | undefined,
+      wordLimit: (item.wordLimit ?? item.wordlimit ?? item.maxWords) as string | number | undefined,
     };
     const opts = item.options;
     if (Array.isArray(opts)) {
@@ -232,7 +240,7 @@ export function parseMarkdownText(text: string): ParsedQuiz {
   let current: RawQuestion | null = null;
   let append: ((s: string) => void) | null = null;
 
-  const keyRe = /^\s*(Q|Question|Type|PassageTitle|Passage|Media|MediaURL|Correct|CorrectAnswer|CorrectAnswers|Answer|Answers|Graded|Scored|Points|Marks|Tags|Tag|Difficulty|Level|Title|Description|FeedbackCorrect|FeedbackIncorrect|F[A-F]|[A-F])\s*[:.)]\s?(.*)$/i;
+  const keyRe = /^\s*(Q|Question|Type|PassageTitle|Passage|Media|MediaURL|Correct|CorrectAnswer|CorrectAnswers|Answer|Answers|Graded|Scored|Points|Marks|Tags|Tag|Difficulty|Level|WordLimit|MaxWords|Title|Description|FeedbackCorrect|ModelAnswer|FeedbackIncorrect|F[A-F]|[A-F])\s*[:.)]\s?(.*)$/i;
 
   for (const line of text.split(/\r?\n/)) {
     const m = line.match(keyRe);
@@ -272,7 +280,8 @@ export function parseMarkdownText(text: string): ParsedQuiz {
         q.tags = value;
         append = (s) => (q.tags = `${q.tags}; ${s}`);
       } else if (key === "DIFFICULTY" || key === "LEVEL") q.difficulty = value;
-      else if (key === "FEEDBACKCORRECT") {
+      else if (key === "WORDLIMIT" || key === "MAXWORDS") q.wordLimit = value;
+      else if (key === "FEEDBACKCORRECT" || key === "MODELANSWER") {
         q.feedbackCorrect = value;
         append = (s) => (q.feedbackCorrect = `${q.feedbackCorrect} ${s}`);
       } else if (key === "FEEDBACKINCORRECT") {

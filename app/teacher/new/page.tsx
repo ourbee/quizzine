@@ -5,7 +5,7 @@
 
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -16,11 +16,13 @@ import { correctKeysOf, groupByPassage, isGraded } from "@/lib/questions";
 import { DEFAULT_PEER_CONFIG, peerMaxScore, type PeerConfig } from "@/lib/peer";
 import { aiPrompt } from "@/lib/aiprompt";
 import { DEFAULT_MST, mstCapacity, type MstConfig } from "@/lib/mst";
-import { TAG_PRESETS, difficultyLabel } from "@/lib/tags";
+import { TAG_PRESETS, buildVocabulary, difficultyLabel, tagNearMisses, type TagNearMiss } from "@/lib/tags";
+import { DEFAULT_RUBRIC, rubricErrors, type RubricConfig } from "@/lib/rubric";
 import { THEMES } from "@/lib/themes";
 import type { GradingMode, MultiScoring, ParsedQuiz, Question, TimerMode } from "@/lib/types";
 import Material from "@/components/Material";
 import Media from "@/components/Media";
+import RubricEditor from "@/components/RubricEditor";
 
 type Step = "intake" | "review" | "settings" | "done";
 
@@ -59,13 +61,17 @@ const TEMPLATE_HEADERS = [
   "Question", "Type", "OptionA", "OptionB", "OptionC", "OptionD",
   "CorrectAnswer", "FeedbackA", "FeedbackB", "FeedbackC", "FeedbackD",
   "Points", "Tags", "Difficulty", "MediaURL", "Passage", "PassageTitle",
+  // Written answers: the answer the marking is judged against, and how long the
+  // answer should run to. ModelAnswer is an alias for FeedbackCorrect, so old
+  // files that use that header are still read exactly as they were.
+  "ModelAnswer", "WordLimit",
 ];
 
 // Shown on the intake screen so the Type column is self-explanatory.
 const TYPE_GUIDE: { type: string; what: string }[] = [
   { type: "mcq", what: "one correct answer, auto-marked" },
   { type: "multi", what: "several correct answers — put every letter in CorrectAnswer, e.g. A,C" },
-  { type: "short / essay", what: "typed answer you mark later" },
+  { type: "short / essay", what: "typed answer you mark later — give it a ModelAnswer and a WordLimit" },
   { type: "poll", what: "options with no correct answer — collected, never marked" },
   { type: "open", what: "typed answer with no correct answer, e.g. a reflection or peer-reviewed task" },
 ];
@@ -97,6 +103,9 @@ const TEMPLATE_ROWS = [
     Type: "short", OptionA: "", OptionB: "", OptionC: "", OptionD: "",
     CorrectAnswer: "", FeedbackA: "", FeedbackB: "", FeedbackC: "", FeedbackD: "",
     Points: 2, Tags: "Skill: Critical terminology; Genre: Criticism", Difficulty: 3, MediaURL: "", Passage: "", PassageTitle: "",
+    ModelAnswer:
+      "A simile states the comparison openly, using 'like' or 'as' — 'my love is like a red, red rose'. A metaphor asserts it instead, so the two things are spoken of as one: 'my love is a rose'. The difference is not decorative: a metaphor claims an identity the reader must accept for the sentence to make sense, which is why it carries more force and more risk than a simile.",
+    WordLimit: 60,
   },
   {
     Question: "Which of these are figures of speech? Tick all that apply.",
@@ -191,6 +200,12 @@ export default function NewQuizPage() {
   const [allowMultiple, setAllowMultiple] = useState(false);
   const [multiScoring, setMultiScoring] = useState<MultiScoring>("exact");
   const [peer, setPeer] = useState<PeerConfig>(DEFAULT_PEER_CONFIG);
+  const [peerFromRubric, setPeerFromRubric] = useState(false);
+  const [rubric, setRubric] = useState<RubricConfig>(DEFAULT_RUBRIC);
+  const [pasteGuard, setPasteGuard] = useState(false);
+  const [hardWordLimit, setHardWordLimit] = useState(false);
+  /** The exact tag spellings this teacher already uses — see lib/tags.ts. */
+  const [vocabulary, setVocabulary] = useState<string[]>([]);
   const [introMedia, setIntroMedia] = useState("");
   const [groupMode, setGroupMode] = useState(false);
   const [groupMin, setGroupMin] = useState("2");
@@ -200,6 +215,16 @@ export default function NewQuizPage() {
   const [publishError, setPublishError] = useState("");
   const [published, setPublished] = useState<PublishResult[]>([]);
 
+  // The teacher's own tag spellings, fetched once: they go into the AI prompt
+  // (so a variant is never invented) and into the upload preview (so one that
+  // slipped through can be adopted with a click).
+  useEffect(() => {
+    fetch("/api/tags")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setVocabulary(Object.keys(d.counts ?? {})))
+      .catch(() => {});
+  }, []);
+
   const selected = useMemo(() => drafts.filter(isIncluded), [drafts]);
   const ready = selected.length > 0 && selected.every((d) => d.errors.length === 0 && d.title.trim() && d.questions.length > 0);
   const hasMultiQuestions = useMemo(
@@ -207,6 +232,49 @@ export default function NewQuizPage() {
     [selected]
   );
   const anyPeer = useMemo(() => selected.some((d) => d.gradingMode === "peer"), [selected]);
+  const anyRubric = useMemo(() => selected.some((d) => d.gradingMode === "rubric"), [selected]);
+  /** Every written question across the selected quizzes — what a rubric marks. */
+  const writtenQuestions = useMemo(
+    () =>
+      selected.flatMap((d) =>
+        d.questions
+          .filter((qn) => qn.type === "short" || qn.type === "essay")
+          .map((qn) => ({ draftId: d.id, draftTitle: d.title, qn }))
+      ),
+    [selected]
+  );
+  const rubricBroken = (anyRubric || peerFromRubric) && rubricErrors(rubric).length > 0;
+
+  // Tags in the uploaded file that are probably variants of ones already in use.
+  const nearMisses: TagNearMiss[] = useMemo(() => {
+    if (!vocabulary.length) return [];
+    const vocab = buildVocabulary(vocabulary);
+    return tagNearMisses(
+      selected.flatMap((d) => d.questions.flatMap((qn) => qn.tags ?? [])),
+      vocab
+    );
+  }, [selected, vocabulary]);
+
+  /** Adopt the established spelling of a tag across every draft that carries it. */
+  function adoptTag(miss: TagNearMiss) {
+    setDrafts((list) =>
+      list.map((d) => ({
+        ...d,
+        questions: d.questions.map((qn) =>
+          qn.tags?.length ? { ...qn, tags: qn.tags.map((t) => (t === miss.incoming ? miss.existing : t)) } : qn
+        ),
+      }))
+    );
+  }
+
+  /** Edit one question inside one draft — word limits and weight overrides. */
+  function patchQuestion(draftId: string, qid: string, patch: Partial<Question>) {
+    setDrafts((list) =>
+      list.map((d) =>
+        d.id === draftId ? { ...d, questions: d.questions.map((qn) => (qn.id === qid ? { ...qn, ...patch } : qn)) } : d
+      )
+    );
+  }
   // Peers mark typed answers only; the count drives the rubric total shown to the teacher.
   const peerQuestionCount = useMemo(() => {
     const counts = selected
@@ -329,8 +397,48 @@ export default function NewQuizPage() {
     XLSX.writeFile(wb, "quizzine-template.xlsx");
   }
 
+  /**
+   * Start from a blank written answer rather than a file. Rubric marking is
+   * pre-selected because that is the whole reason for this door — and the
+   * question is a real one, seeded so the first thing on screen is something to
+   * edit rather than an empty box.
+   */
+  function startWrittenAnswers() {
+    const parsed: ParsedQuiz = {
+      title: "",
+      questions: [
+        {
+          text: "Write your question here.",
+          type: "essay",
+          options: [],
+          points: 10,
+          feedbackCorrect: "",
+          wordLimit: 250,
+        },
+      ],
+    };
+    const result = validateQuestions(parsed, "rubric");
+    setDrafts([
+      {
+        id: `d${Date.now()}-w`,
+        source: "Written answers",
+        parsed,
+        gradingMode: "rubric",
+        autoSurvey: false,
+        title: "",
+        description: "",
+        questions: result.questions,
+        errors: result.errors,
+        warnings: result.warnings,
+        excluded: false,
+        open: true,
+      },
+    ]);
+    setStep("review");
+  }
+
   async function copyPrompt() {
-    await navigator.clipboard.writeText(aiPrompt(preset || null));
+    await navigator.clipboard.writeText(aiPrompt(preset || null, vocabulary));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -350,6 +458,10 @@ export default function NewQuizPage() {
       shuffleOptions,
       multiScoring,
       peer,
+      peerFromRubric,
+      rubric,
+      pasteGuard,
+      hardWordLimit,
       timerMode: effectiveTimerMode,
       examMode,
       mstMode,
@@ -500,7 +612,7 @@ export default function NewQuizPage() {
               </button>
             </div>
             {showPrompt && (
-              <pre className="mt-3 max-h-72 overflow-auto rounded-lg bg-white border border-blue-200 p-3 text-xs whitespace-pre-wrap text-slate-700">{aiPrompt(preset || null)}</pre>
+              <pre className="mt-3 max-h-72 overflow-auto rounded-lg bg-white border border-blue-200 p-3 text-xs whitespace-pre-wrap text-slate-700">{aiPrompt(preset || null, vocabulary)}</pre>
             )}
             <details className="mt-3">
               <summary className="cursor-pointer text-sm font-semibold text-blue-800">What can go in the Type column?</summary>
@@ -533,6 +645,22 @@ export default function NewQuizPage() {
                 begins, so one paper can carry a different passage for each section.
               </p>
             </details>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <p className="text-sm font-semibold text-slate-900">Or start from scratch</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                onClick={startWrittenAnswers}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Written answers
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              One essay question, marked against a rubric — with an optional AI pass you review, never one that marks on
+              your behalf. Add more questions by uploading a file, or edit this one and publish it as it is.
+            </p>
           </div>
 
           <div className="flex gap-2 text-sm font-semibold">
@@ -598,6 +726,39 @@ export default function NewQuizPage() {
           <div className="sticky top-0 z-20 -mx-6 border-b border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
             {reviewActions}
           </div>
+
+          {/*
+            Wording-level tag variants. Case and spacing differences are already
+            folded into the established spelling when the quiz is saved; these
+            are the ones that need a judgement, so they are offered rather than
+            applied. Left alone they simply publish as written.
+          */}
+          {nearMisses.length > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <p className="text-sm font-semibold text-amber-900">
+                {nearMisses.length} tag{nearMisses.length === 1 ? " looks" : "s look"} close to ones you already use
+              </p>
+              <p className="mt-1 text-xs text-amber-800">
+                Two spellings of one topic split your strengths-and-weaknesses report into two buckets too small to read.
+                Adopt the existing spelling unless these really are different things.
+              </p>
+              <ul className="mt-2 space-y-1.5">
+                {nearMisses.map((m) => (
+                  <li key={m.incoming} className="flex flex-wrap items-center gap-2 text-xs text-amber-900">
+                    <span className="rounded bg-white px-2 py-1 font-medium">{m.incoming}</span>
+                    <span>is close to</span>
+                    <span className="rounded bg-white px-2 py-1 font-semibold">{m.existing}</span>
+                    <button
+                      onClick={() => adoptTag(m)}
+                      className="rounded-lg border border-amber-400 px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100"
+                    >
+                      Use the existing tag
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {drafts.length > 1 && (
             <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -696,7 +857,14 @@ export default function NewQuizPage() {
                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="text-sm font-semibold text-slate-800">Marking</p>
-                        {([["graded", "Scored quiz"], ["survey", "No correct answers"], ["peer", "Peer reviewed"]] as [GradingMode, string][]).map(([mode, label]) => (
+                        {(
+                          [
+                            ["graded", "Automatic"],
+                            ["rubric", "Rubric (you, with optional AI assist)"],
+                            ["peer", "Peer review"],
+                            ["survey", "Not scored"],
+                          ] as [GradingMode, string][]
+                        ).map(([mode, label]) => (
                           <button
                             key={mode}
                             onClick={() => setGradingMode(draft.id, mode)}
@@ -711,16 +879,20 @@ export default function NewQuizPage() {
                       <p className="mt-2 text-xs text-slate-600">
                         {draft.gradingMode === "peer"
                           ? "Students answer first with nothing marked. When you open peer review, each response is given to several classmates to mark against your rubric — anonymously, both ways. You set the rubric on the next screen."
-                          : survey
-                            ? "Answers are collected but never marked. Students see a confirmation instead of a score, and you get the response spread for every question."
-                            : "Questions with an answer key are marked automatically; typed answers wait for you. Individual questions can still be left unscored with Type “poll” or “open”."}
+                          : draft.gradingMode === "rubric"
+                            ? "Choice questions are still marked automatically. Written answers go to a marking screen where you score them against your rubric, band by band — optionally starting from a pass by a chatbot, which you review. Students see “response recorded” until you release. You set the rubric on the next screen."
+                            : survey
+                              ? "Answers are collected but never marked. Students see a confirmation instead of a score, and you get the response spread for every question."
+                              : "Questions with an answer key are marked automatically; typed answers wait for you on the marking screen. Individual questions can still be left unscored with Type “poll” or “open”."}
                       </p>
-                      {draft.gradingMode === "peer" && !draft.questions.some((qn) => qn.type === "short" || qn.type === "essay") && (
-                        <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
-                          Peers mark typed answers, and this quiz has none. Add at least one short or essay question,
-                          or there will be nothing for them to review.
-                        </p>
-                      )}
+                      {(draft.gradingMode === "peer" || draft.gradingMode === "rubric") &&
+                        !draft.questions.some((qn) => qn.type === "short" || qn.type === "essay") && (
+                          <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                            {draft.gradingMode === "peer"
+                              ? "Peers mark written answers, and this quiz has none. Add at least one short or essay question, or there will be nothing for them to review."
+                              : "Rubric marking is for written answers, and this quiz has none. Every question here will simply be marked automatically as usual."}
+                          </p>
+                        )}
                       {draft.autoSurvey && (
                         <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
                           No correct answers were found in this file, so it has been set up as a survey. If the answer key
@@ -928,15 +1100,146 @@ export default function NewQuizPage() {
             </label>
           </div>
 
+          {(anyRubric || peerFromRubric) && (
+            <RubricEditor
+              value={rubric}
+              onChange={setRubric}
+              heading="Marking rubric"
+              note="Weights are percentages of the whole, so the same rubric marks a 5-mark paragraph and a 40-mark essay: a reviewer scores a percentage and the marks follow from the question's own points. You, and any AI pass you run, score all of these; peers score the bands only."
+            />
+          )}
+
+          {writtenQuestions.length > 0 && (
+            <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-semibold text-slate-900">Written answers</p>
+              <p className="text-xs text-slate-500">
+                A word limit is advisory: the counter warns the student, and overrunning is marked down under the rubric
+                rather than blocked. Leave it empty for no limit.
+              </p>
+              <div className="space-y-2">
+                {writtenQuestions.map(({ draftId, draftTitle, qn }) => (
+                  <div key={`${draftId}-${qn.id}`} className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2 first:border-0 first:pt-0">
+                    <span className="min-w-0 flex-1 truncate text-sm text-slate-700" title={qn.text}>
+                      {selected.length > 1 && <span className="text-slate-400">{draftTitle}: </span>}
+                      {qn.text}
+                    </span>
+                    <label className="text-xs text-slate-500">
+                      word limit
+                      <input
+                        type="number"
+                        min={1}
+                        value={qn.wordLimit ?? ""}
+                        placeholder="—"
+                        onChange={(e) =>
+                          patchQuestion(draftId, qn.id, {
+                            wordLimit: Number(e.target.value) > 0 ? Math.round(Number(e.target.value)) : undefined,
+                          })
+                        }
+                        className="ml-1.5 w-24 rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-900"
+                      />
+                    </label>
+                    {(anyRubric || peerFromRubric) && (
+                      <details className="w-full">
+                        <summary className="cursor-pointer text-xs font-semibold text-slate-600">
+                          Weight this question differently
+                        </summary>
+                        <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                          {rubric.bands.flatMap((band) =>
+                            band.params.map((param) => (
+                              <label key={param.id} className="flex items-center gap-2 text-xs text-slate-600">
+                                <span className="min-w-0 flex-1 truncate" title={`${band.label} — ${param.label}`}>
+                                  {param.label}
+                                </span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  step={0.5}
+                                  value={qn.rubricWeights?.[param.id] ?? ""}
+                                  placeholder={String(param.weight)}
+                                  onChange={(e) => {
+                                    const next = { ...(qn.rubricWeights ?? {}) };
+                                    if (e.target.value === "") delete next[param.id];
+                                    else next[param.id] = Math.max(0, Number(e.target.value) || 0);
+                                    patchQuestion(draftId, qn.id, {
+                                      rubricWeights: Object.keys(next).length ? next : undefined,
+                                    });
+                                  }}
+                                  className="w-16 rounded-lg border border-slate-300 px-2 py-1 text-right text-slate-900"
+                                />
+                              </label>
+                            ))
+                          )}
+                        </div>
+                        <p className="mt-1.5 text-xs text-slate-400">
+                          Blank means the rubric's own weight. Only the parameters you fill in change.
+                        </p>
+                      </details>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid gap-3 border-t border-slate-100 pt-3 sm:grid-cols-2">
+                <label className="flex items-start gap-2.5 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={hardWordLimit}
+                    onChange={(e) => setHardWordLimit(e.target.checked)}
+                    className="mt-0.5 h-4 w-4"
+                  />
+                  <span>
+                    Stop typing at the word limit
+                    <span className="block text-xs text-slate-500">
+                      Off by default. A student who has written 210 words of a good answer should be told, not silenced.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2.5 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={pasteGuard}
+                    onChange={(e) => setPasteGuard(e.target.checked)}
+                    className="mt-0.5 h-4 w-4"
+                  />
+                  <span>
+                    Block pasting into written answers
+                    <span className="block text-xs text-slate-500">
+                      A deterrent, not a security control — trivially got round, and it breaks drafting offline and
+                      transliteration keyboards, which paste. Typing activity is recorded either way and shown to you on
+                      the marking screen; students are told so before they start.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </div>
+          )}
+
           {anyPeer && (
             <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
               <p className="text-sm font-semibold text-slate-900">Peer review rubric</p>
+              <label className="flex items-start gap-2.5 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={peerFromRubric}
+                  onChange={(e) => setPeerFromRubric(e.target.checked)}
+                  className="mt-0.5 h-4 w-4"
+                />
+                <span>
+                  Use the marking rubric&apos;s bands as the criteria
+                  <span className="block text-xs text-slate-500">
+                    Peers then score four bands on a five-step scale — Very poor to Excellent — instead of ten
+                    parameters. The same rubric, one zoom level out: ten parameters across several questions and three
+                    reviews is where reviewers stop reading and start clicking.
+                  </span>
+                </span>
+              </label>
               <p className="text-xs text-slate-500">
                 Classmates score every typed answer against these criteria and leave a comment. A response is worth{" "}
                 <span className="font-semibold text-slate-700">{peerMaxScore(peer.criteria, peerQuestionCount)} marks</span>{" "}
                 ({peerQuestionCount} reviewed question{peerQuestionCount === 1 ? "" : "s"}).
               </p>
-              <div className="space-y-2">
+              <div className={`space-y-2 ${peerFromRubric ? "hidden" : ""}`}>
                 {peer.criteria.map((c, i) => (
                   <div key={c.id} className="flex flex-wrap items-center gap-2">
                     <input
@@ -1315,10 +1618,19 @@ export default function NewQuizPage() {
             <button onClick={() => setStep("review")} className="rounded-lg border border-slate-300 px-5 py-2.5 font-semibold text-slate-700 hover:bg-slate-100">
               ← Back
             </button>
-            <button onClick={publish} disabled={!!publishing} className="rounded-lg bg-green-700 px-6 py-2.5 text-white font-semibold hover:bg-green-800 disabled:opacity-50">
+            <button
+              onClick={publish}
+              disabled={!!publishing || rubricBroken}
+              className="rounded-lg bg-green-700 px-6 py-2.5 text-white font-semibold hover:bg-green-800 disabled:opacity-50"
+            >
               {publishing || (selected.length > 1 ? `Publish ${selected.length} quizzes` : "Publish quiz")}
             </button>
           </div>
+          {rubricBroken && (
+            <p className="text-xs text-amber-700">
+              The rubric weights do not add up to 100% yet — fix that above and this unlocks.
+            </p>
+          )}
         </section>
       )}
 

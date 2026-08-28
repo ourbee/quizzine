@@ -10,6 +10,7 @@ import { useParams } from "next/navigation";
 import { getTheme } from "@/lib/themes";
 import { NO_SEMESTER, SEMESTER_CHOICES } from "@/lib/normalize";
 import { groupByPassage } from "@/lib/questions";
+import { DESCRIPTORS, descriptorStep, descriptorValue } from "@/lib/rubric";
 import type { PeerCriterion, QuestionFeedback } from "@/lib/peer";
 import type { ReviewPayload } from "@/lib/types";
 import Material from "@/components/Material";
@@ -50,6 +51,8 @@ interface Session {
   reviewerAttemptId: string;
   criteria: PeerCriterion[];
   commentRequired: boolean;
+  /** Criteria are the rubric's bands, scored on the five-step descriptor scale. */
+  fromRubric?: boolean;
   questions: ReviewQuestion[];
   tasks: Task[];
   feedback: Feedback | null;
@@ -453,26 +456,60 @@ export default function PeerReviewPage() {
                               {Number.isFinite(value) ? `${value} / ${c.max}` : `— / ${c.max}`}
                             </span>
                           </div>
-                          <div className="mt-1.5 flex flex-wrap gap-1.5">
-                            {Array.from({ length: c.max + 1 }, (_, n) => (
-                              <button
-                                key={n}
-                                type="button"
-                                onClick={() =>
-                                  setScores((s) => ({ ...s, [qn.id]: { ...(s[qn.id] ?? {}), [c.id]: n } }))
-                                }
-                                aria-pressed={value === n}
-                                className="h-9 w-9 rounded-lg border-2 text-sm font-semibold"
-                                style={
-                                  value === n
-                                    ? { borderColor: theme.accent, background: theme.accent, color: theme.accentText }
-                                    : { borderColor: theme.border }
-                                }
-                              >
-                                {n}
-                              </button>
-                            ))}
-                          </div>
+                          {session.fromRubric ? (
+                            /*
+                              Five named steps, not a slider: a reviewer can tell
+                              "Fair" from "Good" and cannot tell 61 from 64, and
+                              the extra digits only make the aggregate noisier.
+                            */
+                            <div className="mt-1.5 grid grid-cols-5 gap-1.5">
+                              {DESCRIPTORS.map((label, step) => {
+                                const picked = descriptorStep(Number(value), c.max) === step;
+                                return (
+                                  <button
+                                    key={label}
+                                    type="button"
+                                    onClick={() =>
+                                      setScores((s) => ({
+                                        ...s,
+                                        [qn.id]: { ...(s[qn.id] ?? {}), [c.id]: descriptorValue(step, c.max) },
+                                      }))
+                                    }
+                                    aria-pressed={picked}
+                                    className="rounded-lg border-2 px-1 py-2 text-[11px] font-semibold leading-tight"
+                                    style={
+                                      picked
+                                        ? { borderColor: theme.accent, background: theme.accent, color: theme.accentText }
+                                        : { borderColor: theme.border }
+                                    }
+                                  >
+                                    {label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                              {Array.from({ length: c.max + 1 }, (_, n) => (
+                                <button
+                                  key={n}
+                                  type="button"
+                                  onClick={() =>
+                                    setScores((s) => ({ ...s, [qn.id]: { ...(s[qn.id] ?? {}), [c.id]: n } }))
+                                  }
+                                  aria-pressed={value === n}
+                                  className="h-9 w-9 rounded-lg border-2 text-sm font-semibold"
+                                  style={
+                                    value === n
+                                      ? { borderColor: theme.accent, background: theme.accent, color: theme.accentText }
+                                      : { borderColor: theme.border }
+                                  }
+                                >
+                                  {n}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}

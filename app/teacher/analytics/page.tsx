@@ -353,9 +353,9 @@ export default function AnalyticsPage() {
       {result && (
         <>
           {/* ---------- what could not be counted ---------- */}
-          {(result.untaggedQuestions > 0 || result.unanalysableQuestions > 0 || !result.classRows.length) && (
+          {(result.untaggedQuestions > 0 || result.unanalysableQuestions > 0 || (!result.classRows.length && !result.rubricRows.length)) && (
             <section className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              {!result.classRows.length && (
+              {!result.classRows.length && !result.rubricRows.length && (
                 <p className="font-semibold">
                   Nothing here is tagged yet, so there is nothing to report on.{" "}
                   <Link href="/teacher/tags" className="underline">
@@ -373,10 +373,61 @@ export default function AnalyticsPage() {
               )}
               {result.unanalysableQuestions > 0 && (
                 <p className="mt-1">
-                  {result.unanalysableQuestions} typed answer{result.unanalysableQuestions === 1 ? "" : "s"} cannot be
-                  broken down by topic — they are marked as a whole attempt rather than question by question.
+                  {result.unanalysableQuestions} written answer{result.unanalysableQuestions === 1 ? " is" : "s are"}{" "}
+                  still unmarked, so {result.unanalysableQuestions === 1 ? "it counts" : "they count"} towards nothing
+                  here yet.{" "}
+                  <Link href="/teacher" className="underline">
+                    Mark them
+                  </Link>{" "}
+                  and they join the report — marks, topics and all.
                 </p>
               )}
+            </section>
+          )}
+
+          {/* ---------- the rubric ---------- */}
+          {result.rubricRows.length > 0 && (
+            <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-5">
+              <h2 className="font-bold text-slate-900">Written answers, by rubric band</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Averaged over every marked answer in the selection. This is the question the tags cannot answer: not
+                which topic the class is weak on, but which <em>part of writing</em> — and it names next week's lesson.
+              </p>
+              <div className="mt-3 space-y-1.5">
+                {result.rubricRows.map((row) => (
+                  <div
+                    key={`${row.kind}-${row.id}`}
+                    className={`flex items-center gap-3 rounded-lg px-2 py-1.5 ${
+                      row.kind === "band" ? "bg-slate-50" : ""
+                    }`}
+                  >
+                    <span
+                      className={`min-w-0 flex-1 truncate text-sm ${
+                        row.kind === "band" ? "font-semibold text-slate-900" : "pl-4 text-slate-600"
+                      }`}
+                    >
+                      {row.label}
+                      <span className="ml-1.5 text-xs text-slate-400">{row.weight}%</span>
+                    </span>
+                    <div className="h-3 w-40 overflow-hidden rounded bg-slate-100">
+                      <div
+                        className={`h-full ${row.belowPass ? "bg-red-500" : row.kind === "band" ? "bg-blue-600" : "bg-blue-400"}`}
+                        style={{ width: `${Math.min(100, row.percent)}%` }}
+                      />
+                    </div>
+                    <span
+                      className={`w-14 text-right text-sm tabular-nums ${
+                        row.belowPass ? "font-semibold text-red-600" : "text-slate-700"
+                      }`}
+                    >
+                      {row.percent}%
+                    </span>
+                    <span className="w-24 text-right text-xs text-slate-400">
+                      {row.marked} marked · {row.students} student{row.students === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </section>
           )}
 

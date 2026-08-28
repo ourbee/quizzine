@@ -20,9 +20,11 @@ import {
   STATUS_STYLES,
   type ExamProgress,
 } from "@/lib/examstate";
+import { TelemetryCollector } from "@/lib/telemetry";
 import Material from "@/components/Material";
 import Media from "@/components/Media";
 import ExamShell from "@/components/ExamShell";
+import WrittenAnswer from "@/components/WrittenAnswer";
 
 interface PublicOption { key: string; text: string }
 interface PublicQuestion {
@@ -34,6 +36,7 @@ interface PublicQuestion {
   media?: string;
   points: number;
   graded: boolean;
+  wordLimit?: number;
   options: PublicOption[];
 }
 interface PublicQuiz {
@@ -55,12 +58,16 @@ interface PublicQuiz {
     groupMin?: number;
     groupMax?: number;
     multiScoring?: "exact" | "partial";
+    pasteGuard?: boolean;
+    hardWordLimit?: boolean;
   };
   questionCount: number;
   totalPoints?: number;
   mst?: { stages: number; perStage: number };
   survey: boolean;
   peerReview: boolean;
+  /** Marked by the teacher against a rubric and released; nothing scored on submit. */
+  rubricMode: boolean;
   phase: "responding" | "reviewing" | "closed";
   closed: boolean;
   questions: PublicQuestion[];
@@ -114,6 +121,13 @@ export default function StudentQuizPage() {
   const [recheckedAt, setRecheckedAt] = useState(0);
 
   const submittingRef = useRef(false);
+  /**
+   * How the written answers were typed — counts only, never content. Held in a
+   * ref because it is written on every keystroke and must never cause a render.
+   * Students are told about it on the intro screen before they start.
+   */
+  const telemetryRef = useRef<TelemetryCollector | null>(null);
+  if (!telemetryRef.current) telemetryRef.current = new TelemetryCollector();
 
   const activeKey = `qd-active-${slug}`;
   const reviewKey = `qd-review-${slug}`;
@@ -214,10 +228,12 @@ export default function StudentQuizPage() {
   // A student left waiting on their result page is carried into the review round
   // the moment the teacher opens it — no reload, no button, nothing to know.
   useEffect(() => {
-    if (phase !== "review" || !quiz?.peerReview || quiz.phase !== "responding") return;
+    if (phase !== "review" || quiz?.phase === "closed") return;
+    if (!quiz?.peerReview && !quiz?.rubricMode) return;
+    if (quiz.peerReview && quiz.phase !== "responding") return;
     const t = setInterval(() => recheckPhase(true), 15000);
     return () => clearInterval(t);
-  }, [phase, quiz?.peerReview, quiz?.phase, recheckPhase]);
+  }, [phase, quiz?.peerReview, quiz?.rubricMode, quiz?.phase, recheckPhase]);
 
   // ------- clock tick -------
   useEffect(() => {
@@ -287,10 +303,18 @@ export default function StudentQuizPage() {
     try {
       const saved = localStorage.getItem(`qd-ans-${attempt.attemptId}`);
       const finalAnswers = saved ? JSON.parse(saved) : answers;
+      const lengths: Record<string, number> = {};
+      for (const [qid, text] of Object.entries(finalAnswers as Record<string, string>)) {
+        lengths[qid] = String(text ?? "").length;
+      }
       const res = await fetch("/api/attempts/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ attemptId: attempt.attemptId, answers: finalAnswers }),
+        body: JSON.stringify({
+          attemptId: attempt.attemptId,
+          answers: finalAnswers,
+          telemetry: telemetryRef.current?.snapshot(lengths),
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -453,7 +477,9 @@ export default function StudentQuizPage() {
                 <p className="mt-1 text-sm" style={{ color: theme.muted }}>
                   {review.peerReview
                     ? "Thank you — your classmates will mark this. Use the button below when your teacher opens the peer-review round; if you stay on this page, you will be taken through automatically."
-                    : "Thank you — this one is not scored, so there is nothing to mark."}
+                    : review.rubricMode
+                      ? "Thank you — your written answers will be marked against your teacher's rubric. Your marks and feedback appear here once they release them."
+                      : "Thank you — this one is not scored, so there is nothing to mark."}
                   {review.flags.late && " Submitted late."}
                 </p>
               </>
@@ -494,6 +520,38 @@ export default function StudentQuizPage() {
             here on every later visit, so this card — not the intro screen — is the
             only place they can be told that reviewing has opened.
           */}
+          {quiz.rubricMode && (
+            <div className="no-print mt-6 rounded-2xl border-2 p-5" style={{ borderColor: theme.accent, background: theme.accentSoft }}>
+              <h2 className="font-bold">
+                {quiz.phase === "closed" ? "Your marked result is ready" : "Marking is under way"}
+              </h2>
+              <p className="mt-1 text-sm" style={{ color: theme.muted }}>
+                {quiz.phase === "closed"
+                  ? "Your marks, the rubric band by band, and your teacher's written feedback."
+                  : "Your teacher is marking the written answers. Check back once they tell you the results are out."}
+              </p>
+              {quiz.phase === "closed" ? (
+                <a href={`/q/${slug}/result`} className="mt-3 inline-block rounded-lg px-6 py-3 font-semibold" style={accentBtn}>
+                  See my marks and feedback →
+                </a>
+              ) : (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={() => recheckPhase()}
+                    disabled={rechecking}
+                    className="rounded-lg px-5 py-2.5 font-semibold disabled:opacity-50"
+                    style={accentBtn}
+                  >
+                    {rechecking ? "Checking…" : "Check if my result is ready"}
+                  </button>
+                  {!!recheckedAt && !rechecking && (
+                    <span className="text-sm" style={{ color: theme.muted }}>Not released yet — try again later.</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {quiz.peerReview && (
             <div className="no-print mt-6 rounded-2xl border-2 p-5" style={{ borderColor: theme.accent, background: theme.accentSoft }}>
               <h2 className="font-bold">
@@ -693,12 +751,29 @@ export default function StudentQuizPage() {
                 • {quiz.questionCount} questions
                 {quiz.peerReview
                   ? " · marked by your classmates"
-                  : quiz.survey
-                    ? " · not scored"
-                    : quiz.totalPoints !== undefined
-                      ? ` · ${quiz.totalPoints} points`
-                      : ""}
+                  : quiz.rubricMode
+                    ? " · marked against a rubric"
+                    : quiz.survey
+                      ? " · not scored"
+                      : quiz.totalPoints !== undefined
+                        ? ` · ${quiz.totalPoints} points`
+                        : ""}
               </li>
+              {quiz.rubricMode && (
+                <li>
+                  • Written answers are marked against your teacher&apos;s rubric — band by band, with written feedback.
+                  Nothing is scored as you answer; your marks appear when your teacher releases them.
+                </li>
+              )}
+              {quiz.questions.some((qn) => qn.type === "short" || qn.type === "essay") && (
+                <>
+                  {quiz.questions.some((qn) => !!qn.wordLimit) && (
+                    <li>• Some answers have a word limit. The counter warns you; going over is marked down, not blocked.</li>
+                  )}
+                  {s.pasteGuard && <li>• Pasting into written answers is turned off for this quiz.</li>}
+                  <li>• Typing activity on written answers is recorded for your teacher.</li>
+                </>
+              )}
               {quiz.mst && (
                 <li>
                   • This paper comes in {quiz.mst.stages} sections of {quiz.mst.perStage}. Each section is chosen from how the
@@ -773,20 +848,32 @@ export default function StudentQuizPage() {
             {quiz.phase !== "responding" ? (
               <div className="mt-6 rounded-lg p-4 text-sm" style={{ background: theme.accentSoft }}>
                 <p className="font-semibold">
-                  {quiz.phase === "reviewing" ? "Peer review is open" : "This quiz has finished"}
+                  {quiz.rubricMode
+                    ? quiz.phase === "closed"
+                      ? "Results are out"
+                      : "Responses are closed — marking is under way"
+                    : quiz.phase === "reviewing"
+                      ? "Peer review is open"
+                      : "This quiz has finished"}
                 </p>
                 <p className="mt-1" style={{ color: theme.muted }}>
-                  {quiz.phase === "reviewing"
-                    ? "Responses are closed. If you submitted one, you now have a few classmates' answers to mark."
-                    : "Marking is done. If you took part, you can read your result and the comments left on your work."}
+                  {quiz.rubricMode
+                    ? quiz.phase === "closed"
+                      ? "If you took part, you can read your marks and your teacher's feedback."
+                      : "Your teacher is marking the written answers. Check back once they say the results are out."
+                    : quiz.phase === "reviewing"
+                      ? "Responses are closed. If you submitted one, you now have a few classmates' answers to mark."
+                      : "Marking is done. If you took part, you can read your result and the comments left on your work."}
                 </p>
-                <a
-                  href={`/q/${slug}/review`}
-                  className="mt-3 inline-block rounded-lg px-5 py-2.5 font-semibold"
-                  style={accentBtn}
-                >
-                  {quiz.phase === "reviewing" ? "Go to peer review" : "See my result"}
-                </a>
+                {(!quiz.rubricMode || quiz.phase === "closed") && (
+                  <a
+                    href={quiz.rubricMode ? `/q/${slug}/result` : `/q/${slug}/review`}
+                    className="mt-3 inline-block rounded-lg px-5 py-2.5 font-semibold"
+                    style={accentBtn}
+                  >
+                    {quiz.rubricMode ? "See my marks and feedback" : quiz.phase === "reviewing" ? "Go to peer review" : "See my result"}
+                  </a>
+                )}
               </div>
             ) : quiz.closed ? (
               <p className="mt-6 rounded-lg bg-slate-100 text-slate-600 p-4 text-sm font-medium">
@@ -998,13 +1085,16 @@ export default function StudentQuizPage() {
           </div>
         </>
       ) : (
-        <textarea
+        <WrittenAnswer
+          qid={qn.id}
           value={answers[qn.id] ?? ""}
-          onChange={(e) => setAnswers((a) => ({ ...a, [qn.id]: e.target.value }))}
+          onChange={(next) => setAnswers((a) => ({ ...a, [qn.id]: next }))}
           rows={qn.type === "essay" ? 8 : 4}
-          placeholder="Type your answer…"
-          className="mt-3 w-full rounded-xl border-2 px-4 py-3 text-sm bg-white text-slate-900 focus:outline-none"
-          style={{ borderColor: theme.border }}
+          wordLimit={qn.wordLimit}
+          hardLimit={quiz.settings.hardWordLimit}
+          pasteGuard={quiz.settings.pasteGuard}
+          telemetry={telemetryRef.current ?? undefined}
+          colours={{ border: theme.border, muted: theme.muted }}
         />
       )}
     </div>
@@ -1015,6 +1105,10 @@ export default function StudentQuizPage() {
     return (
       <ExamShell
         questions={ordered}
+        attemptId={attempt?.attemptId ?? ""}
+        pasteGuard={quiz.settings.pasteGuard}
+        hardWordLimit={quiz.settings.hardWordLimit}
+        telemetry={telemetryRef.current ?? undefined}
         answers={answers}
         progress={progress}
         index={index}

@@ -20,8 +20,8 @@ How to ask:
 CHECKLIST — ask whenever I have not made these clear:
 1. Topic or source. What exactly is the quiz on? If I attached material, is it the only source, or may you use general knowledge too? If I named a broad subject, which sub-topics should it cover?
 2. Number of questions. Ask if I have not given a number.
-3. Question types. mcq only? A mix? Any typed answers? This is the one teachers most often forget — ask unless I have said.
-4. Whether answers are marked at all. Is this a scored quiz, an unscored survey or opinion poll, or work I intend to have peer reviewed? Ask if my brief could mean either.
+3. Question types. mcq only? A mix? Any typed answers (short/essay)? This is the one teachers most often forget — ask unless I have said.
+4. How answers are marked. A scored quiz, an unscored survey or opinion poll, work I intend to have peer reviewed, or written answers I will mark against a rubric? Ask if my brief could mean more than one of these.
 5. Student level. Which class, year or semester, and roughly what difficulty?
 6. Coverage and balance, when it matters. How to split the questions across topics, or how many of each type.
 7. Tagging. Which dimensions should each question be tagged under (period, genre, author, skill, unit, and so on), and should every question carry a difficulty? Ask if I have not said, unless the TAGGING section below already names a fixed list.
@@ -55,7 +55,9 @@ MY BRIEF (anything I leave blank or vague is something to ask about in step 1):
 QUESTION TYPES:
 - "mcq" — one correct answer, auto-graded.
 - "multi" — SEVERAL correct answers, auto-graded; the student ticks all that apply. Put every correct letter in CorrectAnswer, comma-separated: A,C
-- "short" / "essay" — typed answers I grade myself later. Skip options and CorrectAnswer, but still give FeedbackCorrect as a model answer.
+- "short" / "essay" — typed answers I mark myself later, against a rubric. Skip options and CorrectAnswer. For EVERY one of these you must give:
+  * ModelAnswer — a full answer of the quality that would earn top marks at the level I named. Write it as an answer, not as instructions to the student: it is what I mark against and what students read afterwards.
+  * WordLimit — a sensible length for the answer, as a whole number of words (e.g. 150). "short" is usually 40-120 words, "essay" usually 200-500. Judge it from what the question actually asks for.
 - "poll" — a choice question with NO correct answer (opinion, preference, self-report). Give the options; leave CorrectAnswer empty. Never invent a "right" opinion.
 - "open" — a typed question with NO correct answer (reflection, comment, work to be peer-reviewed). Leave options and CorrectAnswer empty.
 Use "poll" and "open" for anything I describe as a survey, opinion poll, reflection, feedback form, or peer-review task. If I ask for a survey, EVERY question must be "poll" or "open" and no CorrectAnswer may appear anywhere.
@@ -91,8 +93,23 @@ Difficulty is a whole number from 1 to 5: 1 very easy, 2 easy, 3 medium, 4 diffi
 OUTPUT FORMATS:
 
 FORMAT A — Excel/CSV. THIS IS THE DEFAULT: use it unless I have explicitly named another format. A table with EXACTLY these columns, one row per question:
-Question | Type | OptionA | OptionB | OptionC | OptionD | CorrectAnswer | FeedbackA | FeedbackB | FeedbackC | FeedbackD | Points | Tags | Difficulty | MediaURL | Passage | PassageTitle
-(Tags and Difficulty are described under TAGGING below. Give me a downloadable .xlsx file if you can produce one — that is what I want by default. If you cannot, give me a CSV code block I can paste into a spreadsheet instead. CorrectAnswer holds letters only — one letter for "mcq", several comma-separated for "multi", empty for "poll", "open", "short" and "essay". For several quizzes, put each quiz on its own sheet and name the sheet after the quiz — the app builds one quiz per sheet.)
+Question | Type | OptionA | OptionB | OptionC | OptionD | CorrectAnswer | FeedbackA | FeedbackB | FeedbackC | FeedbackD | Points | Tags | Difficulty | MediaURL | Passage | PassageTitle | ModelAnswer | WordLimit
+
+Every column, so you never need me to send you the template file:
+- Question — the question text. Required. A row with no Question is ignored.
+- Type — one of the types listed above. Leave blank and it is treated as "mcq".
+- OptionA..OptionD — the choices, for "mcq", "multi" and "poll" only. Leave empty for typed answers. (OptionE and OptionF also work if you need more than four.)
+- CorrectAnswer — LETTERS ONLY: one letter for "mcq" ("B"), several comma-separated for "multi" ("A,C"), and EMPTY for "poll", "open", "short" and "essay". Never write the option's text here.
+- FeedbackA..FeedbackD — what each option teaches, on graded choice questions.
+- Points — a positive number. Blank means 1. Leave blank on "poll" and "open", which are never scored.
+- Tags — "Dimension: Value" pairs separated by semicolons. See TAGGING below.
+- Difficulty — a whole number 1 to 5.
+- MediaURL — optional public image, audio or YouTube link.
+- Passage / PassageTitle — optional material the student reads before answering; see rule 10 below.
+- ModelAnswer — required on "short" and "essay", empty everywhere else. (On a choice question this column is the same field as general feedback for a correct answer, so leave it empty and use FeedbackA..D instead.)
+- WordLimit — a whole number of words, on "short" and "essay" only. Empty elsewhere.
+
+(Give me a downloadable .xlsx file if you can produce one — that is what I want by default. If you cannot, give me a CSV code block I can paste into a spreadsheet instead. Include every column above, in that order, even where the cells are empty. For several quizzes, put each quiz on its own sheet and name the sheet after the quiz — the app builds one quiz per sheet.)
 
 FORMAT B — JSON: a single code block:
 {
@@ -110,6 +127,8 @@ FORMAT B — JSON: a single code block:
       ],
       "correct": "B",
       "points": 1,
+      "modelAnswer": "",
+      "wordLimit": null,
       "tags": ["Period: Victorian", "Genre: Poetry", "Author: Tennyson"],
       "difficulty": 3,
       "media": "",
@@ -118,7 +137,7 @@ FORMAT B — JSON: a single code block:
     }
   ]
 }
-(For "multi", write "correct": ["A", "C"]. For "poll" and "open", omit "correct" and "points" entirely.)
+(For "multi", write "correct": ["A", "C"]. For "poll" and "open", omit "correct" and "points" entirely. On "short" and "essay", fill in "modelAnswer" and "wordLimit" and omit "options" and "correct".)
 
 FORMAT C — Plain text blocks:
 Title: ...
@@ -136,6 +155,8 @@ FC: feedback for C
 FD: feedback for D
 Correct: B
 Points: 1
+ModelAnswer: (required on short/essay — the answer that would earn top marks)
+WordLimit: (required on short/essay — a whole number of words)
 Tags: Period: Victorian; Genre: Poetry; Author: Tennyson
 Difficulty: 3
 Media: (optional URL)
@@ -165,15 +186,43 @@ export function presetPromptSection(preset: TagPreset): string {
   ].join("\n");
 }
 
-/** The prompt, with a preset's vocabulary spliced in where one is chosen. */
-export function aiPrompt(presetId?: string | null): string {
+/**
+ * The tags this teacher already uses, spelled out for the model.
+ *
+ * This is where tag drift is actually cured. Canonicalising at ingest can only
+ * fix a variant after it has been invented; naming the existing vocabulary here
+ * stops it being invented at all — which is the difference between "Unit 7
+ * Cultural Studies" never appearing and having to be merged away afterwards.
+ */
+export function existingTagsSection(tags: string[]): string {
+  if (!tags.length) return "";
+  const list = [...tags].sort((a, b) => a.localeCompare(b)).slice(0, 300);
+  return [
+    "",
+    "TAGS I ALREADY USE — REUSE THESE:",
+    "Copy these character for character wherever one fits, including their capitalisation, spacing and punctuation. A tag that differs only in case or wording is a NEW tag to my app, and it splits one topic into two half-empty buckets that make my report useless. Only invent a new tag when none of these genuinely applies, and tell me in one line which new ones you invented and why.",
+    "",
+    ...list.map((t) => `- ${t}`),
+  ].join("\n");
+}
+
+/**
+ * The prompt, with a preset's vocabulary spliced in where one is chosen and the
+ * teacher's own existing tags listed where there are any.
+ */
+export function aiPrompt(presetId?: string | null, existingTags: string[] = []): string {
   const preset = findPreset(presetId);
+  const mine = existingTagsSection(existingTags);
   if (!preset) {
     const names = TAG_PRESETS.map((p) => p.name).join(", ");
     return `${AI_PROMPT}
 
 MY TAG VOCABULARY:
-I have not fixed one. Propose a short list of dimensions and values for this subject in step 1 and let me approve it, so that every quiz after this one uses the same words. (Quizzine ships ready-made lists for: ${names}.)`;
+${
+      existingTags.length
+        ? "The list below is the vocabulary — it is what my earlier quizzes actually use."
+        : `I have not fixed one. Propose a short list of dimensions and values for this subject in step 1 and let me approve it, so that every quiz after this one uses the same words. (Quizzine ships ready-made lists for: ${names}.)`
+    }${mine}`;
   }
-  return AI_PROMPT + presetPromptSection(preset);
+  return AI_PROMPT + presetPromptSection(preset) + mine;
 }

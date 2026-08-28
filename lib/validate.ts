@@ -109,8 +109,11 @@ export function validateQuestions(
   const preset = findPreset(presetId);
   const strayTags = new Set<string>();
   // Survey and peer-reviewed quizzes both leave every question unmarked at
-  // submission; peers supply the marks for the latter, later.
-  const surveyQuiz = gradingMode !== "graded";
+  // submission; peers supply the marks for the latter, later, out of their own
+  // rubric total. A rubric-marked quiz is different: its questions keep their
+  // points, and the teacher (with or without an AI pass) awards them later —
+  // so it is scored, and validated as such.
+  const surveyQuiz = gradingMode === "survey" || gradingMode === "peer";
 
   if (!parsed.questions.length) {
     return { errors: ["No questions found. Check that the file follows the template."], warnings, questions };
@@ -157,6 +160,20 @@ export function validateQuestions(
       warnings.push(`${row}: PassageTitle has no Passage to head, so the heading is not shown.`);
     }
 
+    // Written answers only: an advisory length for the answer, which the student
+    // sees as a live counter and the rubric penalises overrunning.
+    let wordLimit: number | undefined;
+    if (raw.wordLimit !== undefined && raw.wordLimit !== "") {
+      const n = Number(raw.wordLimit);
+      if (!Number.isFinite(n) || n <= 0) {
+        warnings.push(`${row}: WordLimit "${raw.wordLimit}" was not understood — use a positive number. Left unset.`);
+      } else if (type === "mcq" || type === "multi") {
+        warnings.push(`${row}: WordLimit is ignored on a choice question.`);
+      } else {
+        wordLimit = Math.round(n);
+      }
+    }
+
     const media = (raw.media ?? "").toString().trim() || undefined;
     if (media && !/^https?:\/\//i.test(media)) {
       warnings.push(`${row}: MediaURL "${media}" does not look like a link (should start with http/https).`);
@@ -188,6 +205,7 @@ export function validateQuestions(
       feedbackIncorrect: (raw.feedbackIncorrect ?? "").toString().trim() || undefined,
       tags: tags.length ? tags : undefined,
       difficulty,
+      wordLimit,
     };
     if (!graded) question.graded = false;
 
@@ -260,6 +278,12 @@ export function validateQuestions(
     const list = [...strayTags].slice(0, 8);
     warnings.push(
       `${strayTags.size} tag${strayTags.size === 1 ? " is" : "s are"} outside the “${preset.name}” list (${list.join(", ")}${strayTags.size > list.length ? ", …" : ""}). They will be saved — check the spelling matches the tags you already use.`
+    );
+  }
+
+  if (gradingMode === "rubric" && !questions.some((qn) => qn.type === "short" || qn.type === "essay")) {
+    warnings.push(
+      "Rubric marking is for written answers, and this quiz has none — every question here is marked automatically as usual."
     );
   }
 

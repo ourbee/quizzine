@@ -117,13 +117,19 @@ export default function QuizDetailPage() {
     });
   }, [quiz, attempts]);
 
-  // A quiz with nothing to score has no meaningful average. A peer-reviewed one
-  // has no marks either until the reviews are in and the teacher releases them.
+  // A quiz with nothing to score has no meaningful average. A peer-reviewed or
+  // rubric-marked one has no marks either until they are in and released.
   const peerMode = quiz?.settings.gradingMode === "peer";
+  const rubricMode = quiz?.settings.gradingMode === "rubric";
   const survey = quiz
     ? quiz.settings.gradingMode === "survey" ||
-      (peerMode ? (quiz.phase ?? "responding") !== "closed" : isSurvey(quiz.questions))
+      (peerMode || rubricMode ? (quiz.phase ?? "responding") !== "closed" : isSurvey(quiz.questions))
     : false;
+  // Written answers can be marked in any scored quiz, not only a rubric one —
+  // this is what finally resolves the `pending` items grade() leaves behind.
+  const writtenCount = quiz
+    ? quiz.questions.filter((qn) => !isChoice(qn) && isGraded(qn)).length
+    : 0;
   const avg = attempts.length
     ? attempts.reduce((s, a) => s + (a.score ?? 0), 0) / attempts.length
     : 0;
@@ -221,6 +227,14 @@ export default function QuizDetailPage() {
           >
             Edit
           </Link>
+          {writtenCount > 0 && (
+            <Link
+              href={`/teacher/quiz/${quiz.id}/mark`}
+              className="rounded-lg px-4 py-2 text-sm font-semibold bg-blue-700 text-white hover:bg-blue-800"
+            >
+              Mark written answers
+            </Link>
+          )}
           <Link
             href="/teacher/tags"
             className="rounded-lg px-4 py-2 text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200"
@@ -375,6 +389,23 @@ export default function QuizDetailPage() {
 
       {quiz.settings.gradingMode === "peer" && (
         <PeerReviewPanel quizId={quiz.id} slug={quiz.slug} onPhaseChange={load} />
+      )}
+
+      {rubricMode && (
+        <section className="mt-10 rounded-xl border border-slate-200 bg-white p-4">
+          <h2 className="font-bold text-slate-900">Rubric marking</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            {(quiz.phase ?? "responding") === "closed"
+              ? `Results are released. Students see their marks and feedback at /q/${quiz.slug}/result.`
+              : "Students see “response recorded” until you release. Mark the written answers, then release when you are ready — with or without an AI pass to start you off."}
+          </p>
+          <Link
+            href={`/teacher/quiz/${quiz.id}/mark`}
+            className="mt-3 inline-block rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800"
+          >
+            Go to marking →
+          </Link>
+        </section>
       )}
 
       <section className="mt-10">

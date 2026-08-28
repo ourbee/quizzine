@@ -89,6 +89,13 @@ ALTER TABLE attempts ADD COLUMN IF NOT EXISTS mst jsonb;
 -- Who may sign in. An empty table means only the default owner, which is the
 -- safe way round: a deployment nobody has been invited to is a deployment only
 -- its owner can fill with quizzes.
+-- Rubric marking: what each reviewer (the teacher, and the AI pass the teacher
+-- pasted back) said about each written answer. Percentages, never only the
+-- derived mark — see lib/marking.ts.
+ALTER TABLE attempts ADD COLUMN IF NOT EXISTS marking jsonb;
+-- How a written answer was typed: counts only, never content. See lib/telemetry.ts.
+ALTER TABLE attempts ADD COLUMN IF NOT EXISTS telemetry jsonb;
+
 CREATE TABLE IF NOT EXISTS teacher_invites (
   email text PRIMARY KEY,
   invited_by text NOT NULL,

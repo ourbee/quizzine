@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   const attempts = withResults && quizIds.length
     ? await q(
         `SELECT id, quiz_id, student, group_info, answers, per_question, score, max_score,
-                teacher_score, flags, status, mst, started_at, submitted_at
+                teacher_score, flags, status, mst, marking, telemetry, started_at, submitted_at
            FROM attempts WHERE quiz_id = ANY($1::text[]) ORDER BY submitted_at ASC NULLS LAST`,
         [quizIds]
       )

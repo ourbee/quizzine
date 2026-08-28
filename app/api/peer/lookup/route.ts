@@ -136,6 +136,15 @@ export async function POST(req: NextRequest) {
     reviewerAttemptId: mine.id,
     criteria: config.criteria,
     commentRequired: config.commentRequired,
+    /**
+     * The criteria are the rubric's own bands, so peers score four bands where
+     * the teacher and the AI pass score ten parameters — the same rubric at two
+     * zoom levels. It also switches the input to the descriptor scale: ten
+     * parameters across several questions and three reviews is fatigue-clicking
+     * territory, and a band judged on five named steps beats a parameter judged
+     * on a number nobody can calibrate.
+     */
+    fromRubric: !!quiz.settings.peerFromRubric,
     questions: questions.map((qn) => ({ id: qn.id, text: qn.text, passage: qn.passage, passageTitle: qn.passageTitle })),
     tasks,
     feedback,

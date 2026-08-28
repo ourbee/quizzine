@@ -10,8 +10,9 @@ import { checkQuota } from "@/lib/access";
 import { genId, slugify } from "@/lib/normalize";
 import { correctKeysOf, isGraded } from "@/lib/questions";
 import { normalizePeerConfig } from "@/lib/peer";
+import { bandCriteria, normalizeRubricConfig } from "@/lib/rubric";
 import { normalizeMstConfig } from "@/lib/mst";
-import { findPreset } from "@/lib/tags";
+import { buildVocabulary, canonicalizeTags, findPreset } from "@/lib/tags";
 import type { Question, QuizSettings } from "@/lib/types";
 
 export async function GET() {
@@ -85,12 +86,31 @@ export async function POST(req: NextRequest) {
   // exam interface does: the student must be free to move around the stage they
   // are sitting.
   const timerMode = (examMode || mstMode) && rawTimerMode === "question" ? "none" : rawTimerMode;
+  const gradingMode: QuizSettings["gradingMode"] = ["survey", "peer", "rubric"].includes(body.settings?.gradingMode)
+    ? body.settings.gradingMode
+    : "graded";
+  // A rubric is stored whenever anything marks against it: rubric mode itself,
+  // or a peer round whose criteria are the rubric's own bands.
+  const peerFromRubric = gradingMode === "peer" && !!body.settings?.peerFromRubric;
+  const wantsRubric = gradingMode === "rubric" || peerFromRubric;
+  const rubric = wantsRubric ? normalizeRubricConfig(body.settings?.rubric) : undefined;
   const settings: QuizSettings = {
     shuffleQuestions: !!body.settings?.shuffleQuestions,
     shuffleOptions: !!body.settings?.shuffleOptions,
-    gradingMode: ["survey", "peer"].includes(body.settings?.gradingMode) ? body.settings.gradingMode : "graded",
+    gradingMode,
     multiScoring: body.settings?.multiScoring === "partial" ? "partial" : "exact",
-    peer: body.settings?.gradingMode === "peer" ? normalizePeerConfig(body.settings?.peer) : undefined,
+    peer:
+      gradingMode === "peer"
+        ? normalizePeerConfig(
+            peerFromRubric && rubric
+              ? { ...(body.settings?.peer ?? {}), criteria: bandCriteria(rubric) }
+              : body.settings?.peer
+          )
+        : undefined,
+    rubric,
+    peerFromRubric: peerFromRubric || undefined,
+    pasteGuard: !!body.settings?.pasteGuard || undefined,
+    hardWordLimit: !!body.settings?.hardWordLimit || undefined,
     timerMode,
     maxMinutes: Number(body.settings?.maxMinutes) > 0 ? Number(body.settings.maxMinutes) : undefined,
     perQuestionSeconds:
@@ -106,6 +126,21 @@ export async function POST(req: NextRequest) {
     groupMin,
     groupMax,
   };
+  /*
+   * Tag hygiene at the door: an incoming tag that matches one the teacher
+   * already uses is stored in THEIR spelling, so a case or spacing variant can
+   * never found a second bucket and split a report in half. Done here rather
+   * than only in the browser, because this is the gate every quiz passes
+   * through however it was created.
+   */
+  const owned = await q<{ questions: Question[] }>(`SELECT questions FROM quizzes WHERE owner = $1`, [owner]);
+  const vocabulary = buildVocabulary(owned.flatMap((z) => (z.questions ?? []).flatMap((qn) => qn.tags ?? [])));
+  if (vocabulary.tags.length) {
+    for (const qn of questions) {
+      if (qn.tags?.length) qn.tags = canonicalizeTags(qn.tags, vocabulary);
+    }
+  }
+
   const id = genId();
   const slug = slugify(body.title);
   const preset = findPreset(body.preset)?.id ?? null;

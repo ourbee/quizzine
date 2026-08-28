@@ -8,10 +8,12 @@ import { q } from "@/lib/db";
 import { currentTeacher } from "@/lib/auth";
 import { planEdit } from "@/lib/edit";
 import { grade } from "@/lib/grade";
+import { applyMarking, normalizeMarking } from "@/lib/marking";
 import { normalizeMstConfig, servedQuestions } from "@/lib/mst";
 import { normalizePeerConfig } from "@/lib/peer";
+import { bandCriteria, normalizeRubricConfig } from "@/lib/rubric";
 import { validateQuestions } from "@/lib/validate";
-import { findPreset } from "@/lib/tags";
+import { buildVocabulary, canonicalizeTags, findPreset } from "@/lib/tags";
 import type { MstState } from "@/lib/mst";
 import type { PerQuestionResult, Question, QuizSettings, RawQuestion } from "@/lib/types";
 
@@ -80,11 +82,34 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     }
     // validateQuestions renumbers positionally; the incoming ids are what map an
     // edited question back to the one students answered, so they are restored.
+    // The validator rebuilds each question from the loose upload shape, so
+    // anything it does not know about has to be carried across by hand. Ids are
+    // what map an edited question back to the one students answered; the
+    // per-question rubric weights are simply not a validated field.
     const withIds = result.questions.map((qn, i) => {
-      const incoming = (body.questions as RawQuestion[])[i] as RawQuestion & { id?: string };
-      return incoming?.id ? { ...qn, id: incoming.id } : { ...qn, id: "" };
+      const incoming = (body.questions as RawQuestion[])[i] as RawQuestion & {
+        id?: string;
+        rubricWeights?: Record<string, number>;
+      };
+      const weights = incoming?.rubricWeights;
+      return {
+        ...qn,
+        id: incoming?.id ?? "",
+        ...(weights && Object.keys(weights).length ? { rubricWeights: weights } : {}),
+      };
     });
-    plan = planEdit(before, withIds, attemptCount > 0);
+    // The same hygiene an upload gets: an edited tag that matches an existing
+    // spelling is stored in that spelling rather than founding a variant.
+    const owned = await q<{ questions: Question[] }>(
+      `SELECT questions FROM quizzes WHERE owner = $1 AND id <> $2`,
+      [owner, id]
+    );
+    const vocabulary = buildVocabulary(owned.flatMap((z) => (z.questions ?? []).flatMap((qn) => qn.tags ?? [])));
+    const canonical = vocabulary.tags.length
+      ? withIds.map((qn) => (qn.tags?.length ? { ...qn, tags: canonicalizeTags(qn.tags, vocabulary) } : qn))
+      : withIds;
+
+    plan = planEdit(before, canonical, attemptCount > 0);
     questions = plan.questions;
 
     if (!body.confirm && plan.tier !== "safe") {
@@ -99,9 +124,15 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     : (settingsBefore.timerMode ?? "none");
   const timerMode = (examMode || mstMode) && rawTimerMode === "question" ? "none" : rawTimerMode;
 
-  const gradingMode = ["graded", "survey", "peer"].includes(body.settings?.gradingMode)
+  const gradingMode = ["graded", "survey", "peer", "rubric"].includes(body.settings?.gradingMode)
     ? body.settings.gradingMode
     : (settingsBefore.gradingMode ?? "graded");
+  const peerFromRubric =
+    gradingMode === "peer" && !!(body.settings?.peerFromRubric ?? settingsBefore.peerFromRubric);
+  const rubric =
+    gradingMode === "rubric" || peerFromRubric
+      ? normalizeRubricConfig(body.settings?.rubric ?? settingsBefore.rubric)
+      : undefined;
 
   const settings: QuizSettings = {
     ...settingsBefore,
@@ -109,7 +140,18 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     shuffleOptions: !!(body.settings?.shuffleOptions ?? settingsBefore.shuffleOptions),
     gradingMode,
     multiScoring: (body.settings?.multiScoring ?? settingsBefore.multiScoring) === "partial" ? "partial" : "exact",
-    peer: gradingMode === "peer" ? normalizePeerConfig(body.settings?.peer ?? settingsBefore.peer) : undefined,
+    peer:
+      gradingMode === "peer"
+        ? normalizePeerConfig(
+            peerFromRubric && rubric
+              ? { ...(body.settings?.peer ?? settingsBefore.peer ?? {}), criteria: bandCriteria(rubric) }
+              : (body.settings?.peer ?? settingsBefore.peer)
+          )
+        : undefined,
+    rubric,
+    peerFromRubric: peerFromRubric || undefined,
+    pasteGuard: (body.settings?.pasteGuard ?? settingsBefore.pasteGuard) ? true : undefined,
+    hardWordLimit: (body.settings?.hardWordLimit ?? settingsBefore.hardWordLimit) ? true : undefined,
     timerMode,
     maxMinutes: Number(body.settings?.maxMinutes ?? settingsBefore.maxMinutes) > 0
       ? Number(body.settings?.maxMinutes ?? settingsBefore.maxMinutes)
@@ -166,7 +208,8 @@ async function regradeAttempts(quizId: string, questions: Question[], settings: 
     id: string;
     answers: Record<string, string> | null;
     mst: MstState | null;
-  }>(`SELECT id, answers, mst FROM attempts WHERE quiz_id = $1 AND status = 'submitted'`, [quizId]);
+    marking: unknown;
+  }>(`SELECT id, answers, mst, marking FROM attempts WHERE quiz_id = $1 AND status = 'submitted'`, [quizId]);
 
   let count = 0;
   for (const attempt of attempts) {
@@ -176,7 +219,16 @@ async function regradeAttempts(quizId: string, questions: Question[], settings: 
       settings.mstMode && attempt.mst
         ? servedQuestions(questions, attempt.mst, normalizeMstConfig(settings.mst))
         : questions;
-    const { per, score, max } = grade(paper, attempt.answers ?? {}, settings.multiScoring ?? "exact");
+    const graded = grade(paper, attempt.answers ?? {}, settings.multiScoring ?? "exact");
+    // Re-marking from the answers must not discard the marking a reviewer has
+    // already done: it is folded back in, so an edit to a question's wording or
+    // its points rescales the mark instead of losing it.
+    const { per, score, max } = applyMarking(
+      paper,
+      graded.per,
+      attempt.answers,
+      normalizeMarking(attempt.marking)
+    );
     await q(`UPDATE attempts SET per_question = $1, score = $2, max_score = $3 WHERE id = $4`, [
       JSON.stringify(per satisfies PerQuestionResult[]),
       score,

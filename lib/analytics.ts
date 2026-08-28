@@ -27,11 +27,20 @@
  *    is the student or the teaching. All three are computed, none is collapsed
  *    into a single verdict.
  *
- * Only auto-marked questions can be counted. Typed answers are marked as a
- * whole attempt rather than question by question, so they have no per-question
- * result to attribute — they are counted as unanalysable and reported as such.
+ * A question counts once it has a per-question result to attribute. Choice
+ * questions have one the moment they are submitted; a written answer gets one
+ * when a reviewer marks it against the rubric (lib/marking.ts writes the mark
+ * back onto the attempt). Written answers still waiting for a reviewer are
+ * counted as unanalysable and reported as such — which now shrinks as marking
+ * proceeds, instead of condemning a written-answer quiz to an empty report.
+ *
+ * Rubric marking also carries its own dimension: the average per band and per
+ * parameter across the class, which answers "what is the class worst at" in the
+ * rubric's own words rather than the tags'.
  */
 
+import { effectiveMark, type MarkingRecord } from "./marking.ts";
+import { bandPercents, effectiveWeights, rubricParams, type RubricConfig } from "./rubric.ts";
 import { canonicalRoll, type AliasMap, type Repeats } from "./report.ts";
 import { DIFFICULTY_DIMENSION, difficultyLabel, formatTag, parseTag, tagKey } from "./tags.ts";
 import type { GroupInfo, PerQuestionResult, StudentInfo } from "./types";
@@ -44,8 +53,10 @@ export interface AnalyticsQuestion {
   points: number;
   /** false for polls, surveys and anything else collected but not scored. */
   graded: boolean;
-  /** mcq and multi only — the kinds with a per-question mark to attribute. */
+  /** mcq and multi only — marked without a reviewer having to look at them. */
   autoMarked: boolean;
+  /** Written answers: the per-question rubric weights, when they were overridden. */
+  rubricWeights?: Record<string, number>;
 }
 
 export interface AnalyticsQuiz {
@@ -53,6 +64,8 @@ export interface AnalyticsQuiz {
   title: string;
   created_at: string;
   questions: AnalyticsQuestion[];
+  /** The rubric written answers were marked against, when there was one. */
+  rubric?: RubricConfig | null;
 }
 
 export interface AnalyticsAttempt {
@@ -64,6 +77,8 @@ export interface AnalyticsAttempt {
   score: number | null;
   max_score: number | null;
   submitted_at: string;
+  /** What each reviewer said about each written answer — see lib/marking.ts. */
+  marking?: MarkingRecord | null;
 }
 
 export interface AnalyticsOptions {
@@ -202,11 +217,34 @@ export interface AnalyticsResult {
   students: StudentProfile[];
   classRows: ClassTagRow[];
   classDifficultyRows: ClassTagRow[];
-  /** Auto-marked, scored questions in the selection that carry no tag at all. */
+  /** Scored questions in the selection that carry no tag at all. */
   untaggedQuestions: number;
-  /** Typed answers, which have no per-question mark to attribute. */
+  /** Written answers nobody has marked yet, so they have no result to attribute. */
   unanalysableQuestions: number;
+  /**
+   * Rubric bands and parameters, averaged across everyone in the selection.
+   * Empty unless some written answers have actually been marked.
+   */
+  rubricRows: RubricRow[];
   options: AnalyticsOptions;
+}
+
+/** One band or parameter of the rubric, averaged over marked answers. */
+export interface RubricRow {
+  id: string;
+  label: string;
+  kind: "band" | "param";
+  /** The band this parameter belongs to; equal to `id` on a band row. */
+  bandId: string;
+  /** Percentage of the whole rubric this row is worth. */
+  weight: number;
+  /** Mean percentage scored on it. */
+  percent: number;
+  /** Marked answers behind the mean. */
+  marked: number;
+  /** Students with at least one marked answer counting into it. */
+  students: number;
+  belowPass: boolean;
 }
 
 /** Everyone an attempt counts for — a group submission credits every member. */
@@ -295,14 +333,15 @@ export function buildAnalytics(
   for (const z of order) questionIndex.set(z.id, new Map(z.questions.map((qn) => [qn.id, qn])));
 
   let untaggedQuestions = 0;
-  let unanalysableQuestions = 0;
   for (const z of order) {
     for (const qn of z.questions) {
       if (!qn.graded) continue;
-      if (!qn.autoMarked) unanalysableQuestions += 1;
-      else if (!qn.tags.length && qn.difficulty === undefined) untaggedQuestions += 1;
+      if (!qn.tags.length && qn.difficulty === undefined) untaggedQuestions += 1;
     }
   }
+  // Filled during attribution rather than counted up front: a written answer is
+  // unanalysable only while it is unmarked, and only the attempts know that.
+  const unmarkedQuestions = new Set<string>();
 
   const wanted = options.rolls?.length
     ? new Set(options.rolls.map((r) => canonicalRoll(r, aliases)))
@@ -323,6 +362,33 @@ export function buildAnalytics(
   }
 
   const working = new Map<string, Working>();
+  // Rubric bands and parameters, pooled across the selection. Keyed
+  // "band:<id>" / "param:<id>" so the two levels never collide.
+  interface RubricTally {
+    label: string;
+    kind: "band" | "param";
+    bandId: string;
+    weight: number;
+    sum: number;
+    marked: number;
+    students: Set<string>;
+  }
+  const rubricTallies = new Map<string, RubricTally>();
+  const addRubric = (
+    key: string,
+    seed: Omit<RubricTally, "sum" | "marked" | "students">,
+    percent: number,
+    roll: string
+  ) => {
+    let tally = rubricTallies.get(key);
+    if (!tally) {
+      tally = { ...seed, sum: 0, marked: 0, students: new Set() };
+      rubricTallies.set(key, tally);
+    }
+    tally.sum += percent;
+    tally.marked += 1;
+    tally.students.add(roll);
+  };
   const classTags = new Map<string, Tally>();
   const classDifficulty = new Map<string, Tally>();
   const classLabels = new Map<string, string>();
@@ -362,9 +428,14 @@ export function buildAnalytics(
 
       for (const per of attempt.per_question ?? []) {
         const qn = lookup.get(per.qid);
-        if (!qn || !qn.graded || !qn.autoMarked) continue;
-        // Not yet marked: no result to attribute either way.
-        if (per.pending || per.ungraded) continue;
+        if (!qn || !qn.graded) continue;
+        // Not yet marked: no result to attribute either way. A written answer
+        // sitting here is one the teacher has not got to — worth reporting as
+        // such, which is what `unanalysableQuestions` counts.
+        if (per.pending || per.ungraded) {
+          if (per.pending) unmarkedQuestions.add(`${quiz.id}|${per.qid}`);
+          continue;
+        }
 
         const awarded = Number(per.awarded) || 0;
         const possible = qn.points;
@@ -427,6 +498,50 @@ export function buildAnalytics(
             tags: qn.tags,
             difficulty: qn.difficulty,
           });
+        }
+      }
+
+      // Rubric marking is its own dimension: how the class did band by band and
+      // parameter by parameter, in the rubric's words rather than the tags'.
+      if (quiz.rubric && attempt.marking) {
+        const rubric = quiz.rubric;
+        const bandOf = new Map<string, { id: string; label: string; weight: number }>();
+        for (const band of rubric.bands) {
+          const weight = band.params.reduce((n, p) => n + p.weight, 0);
+          for (const p of band.params) bandOf.set(p.id, { id: band.id, label: band.label, weight });
+        }
+        for (const qn of quiz.questions) {
+          if (!qn.graded || qn.autoMarked) continue;
+          const found = effectiveMark(attempt.marking, qn.id);
+          if (!found) continue;
+          const weights = effectiveWeights(rubric, qn.rubricWeights);
+          for (const p of rubricParams(rubric)) {
+            const weight = weights[p.id] ?? p.weight;
+            const raw = Number(found.entry.params[p.id]);
+            if (!(weight > 0) || !Number.isFinite(raw)) continue;
+            const home = bandOf.get(p.id);
+            addRubric(
+              `param:${p.id}`,
+              { label: p.label, kind: "param", bandId: home?.id ?? p.id, weight: p.weight },
+              (Math.min(weight, Math.max(0, raw)) / weight) * 100,
+              roll
+            );
+          }
+          for (const band of bandPercents(rubric, found.entry.params, weights)) {
+            if (band.percent === null) continue;
+            const home = rubric.bands.find((b) => b.id === band.id);
+            addRubric(
+              `band:${band.id}`,
+              {
+                label: band.label,
+                kind: "band",
+                bandId: band.id,
+                weight: home ? home.params.reduce((n, p) => n + p.weight, 0) : band.weight,
+              },
+              band.percent,
+              roll
+            );
+          }
         }
       }
 
@@ -585,7 +700,27 @@ export function buildAnalytics(
     classRows: buildClassRows(classTags),
     classDifficultyRows: buildClassRows(classDifficulty),
     untaggedQuestions,
-    unanalysableQuestions,
+    unanalysableQuestions: unmarkedQuestions.size,
+    // Bands before their own parameters, heaviest band first: the order a
+    // teacher reads them in when deciding what to reteach.
+    rubricRows: [...rubricTallies.entries()]
+      .map(([key, t]) => ({
+        id: key.slice(key.indexOf(":") + 1),
+        label: t.label,
+        kind: t.kind,
+        bandId: t.bandId,
+        weight: round1(t.weight),
+        percent: round1(t.sum / t.marked),
+        marked: t.marked,
+        students: t.students.size,
+        belowPass: t.sum / t.marked < options.passMark,
+      }))
+      .sort(
+        (a, b) =>
+          (rubricTallies.get(`band:${b.bandId}`)?.weight ?? 0) - (rubricTallies.get(`band:${a.bandId}`)?.weight ?? 0) ||
+          a.bandId.localeCompare(b.bandId) ||
+          (a.kind === b.kind ? b.weight - a.weight || a.label.localeCompare(b.label) : a.kind === "band" ? -1 : 1)
+      ),
     options,
   };
 }

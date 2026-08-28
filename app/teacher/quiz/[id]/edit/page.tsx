@@ -12,8 +12,10 @@ import { DEFAULT_MST, mstCapacity, normalizeMstConfig, type MstConfig } from "@/
 import { TAG_PRESETS, difficultyLabel } from "@/lib/tags";
 import { correctKeysOf, isGraded } from "@/lib/questions";
 import { THEMES } from "@/lib/themes";
+import { DEFAULT_RUBRIC, normalizeRubricConfig, rubricErrors, type RubricConfig } from "@/lib/rubric";
+import RubricEditor from "@/components/RubricEditor";
 import type { EditPlan } from "@/lib/edit";
-import type { Question, QuizSettings, TimerMode } from "@/lib/types";
+import type { GradingMode, Question, QuizSettings, TimerMode } from "@/lib/types";
 import Logo from "@/components/Logo";
 
 /** A question in the form: the stored shape, plus the raw text of its tag box. */
@@ -33,6 +35,7 @@ export default function EditQuizPage() {
   const [preset, setPreset] = useState("");
   const [settings, setSettings] = useState<QuizSettings | null>(null);
   const [mst, setMst] = useState<MstConfig>(DEFAULT_MST);
+  const [rubric, setRubric] = useState<RubricConfig>(DEFAULT_RUBRIC);
   const [rows, setRows] = useState<Row[]>([]);
   const [attemptCount, setAttemptCount] = useState(0);
 
@@ -57,11 +60,15 @@ export default function EditQuizPage() {
       setPreset(data.quiz.preset ?? "");
       setSettings(data.quiz.settings ?? null);
       setMst(normalizeMstConfig(data.quiz.settings?.mst));
+      setRubric(normalizeRubricConfig(data.quiz.settings?.rubric));
       setRows((data.quiz.questions ?? []).map(toRow));
       setAttemptCount((data.attempts ?? []).length);
       setLoading(false);
     })();
   }, [id]);
+
+  const rubricBlocked =
+    !!settings && (settings.gradingMode === "rubric" || !!settings.peerFromRubric) && rubricErrors(rubric).length > 0;
 
   function patch(i: number, change: Partial<Row>) {
     setRows((list) => list.map((r, j) => (j === i ? { ...r, ...change } : r)));
@@ -89,7 +96,11 @@ export default function EditQuizPage() {
         theme,
         preset: preset || null,
         confirm,
-        settings: { ...settings, mst: settings.mstMode ? mst : undefined },
+        settings: {
+          ...settings,
+          mst: settings.mstMode ? mst : undefined,
+          rubric: settings.gradingMode === "rubric" || settings.peerFromRubric ? rubric : undefined,
+        },
         questions: rows.map((r) => ({
           id: r.id,
           text: r.text,
@@ -105,6 +116,10 @@ export default function EditQuizPage() {
           feedbackIncorrect: r.feedbackIncorrect,
           tags: r.tagText,
           difficulty: r.difficulty,
+          // Both survive the round trip only because they are sent back: the
+          // validator rebuilds each question from what arrives here.
+          wordLimit: r.wordLimit,
+          rubricWeights: r.rubricWeights,
         })),
       };
       const res = await fetch(`/api/quizzes/${id}`, {
@@ -210,7 +225,7 @@ export default function EditQuizPage() {
             </button>
             <button
               onClick={() => save(true)}
-              disabled={saving}
+              disabled={saving || rubricBlocked}
               className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
             >
               {saving ? "Saving…" : "Save and re-mark"}
@@ -272,6 +287,65 @@ export default function EditQuizPage() {
       {/* ---------- settings ---------- */}
       <section className="mt-4 space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
         <h2 className="font-bold text-slate-900">Settings</h2>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-slate-700">Marking</span>
+          {(
+            [
+              ["graded", "Automatic"],
+              ["rubric", "Rubric"],
+              ["peer", "Peer review"],
+              ["survey", "Not scored"],
+            ] as [GradingMode, string][]
+          ).map(([mode, label]) => (
+            <button
+              key={mode}
+              onClick={() => set({ gradingMode: mode })}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                (settings.gradingMode ?? "graded") === mode
+                  ? "bg-slate-900 text-white"
+                  : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          {(
+            [
+              ["pasteGuard", "Block pasting into written answers"],
+              ["hardWordLimit", "Stop typing at the word limit"],
+            ] as const
+          ).map(([key, label]) => (
+            <label key={key} className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={!!settings[key]}
+                onChange={(e) => set({ [key]: e.target.checked } as Partial<QuizSettings>)}
+                className="h-4 w-4"
+              />
+              {label}
+            </label>
+          ))}
+          {(settings.gradingMode ?? "graded") === "peer" && (
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={!!settings.peerFromRubric}
+                onChange={(e) => set({ peerFromRubric: e.target.checked })}
+                className="h-4 w-4"
+              />
+              Peers score the rubric&apos;s bands
+            </label>
+          )}
+        </div>
+
+        {(settings.gradingMode === "rubric" || settings.peerFromRubric) && (
+          <RubricEditor value={rubric} onChange={setRubric} />
+        )}
+
         <div className="grid gap-2 sm:grid-cols-2">
           {(
             [
@@ -534,7 +608,33 @@ export default function EditQuizPage() {
                       />
                     </label>
                   )}
+                  {(r.type === "short" || r.type === "essay") && (
+                    <label className="text-sm text-slate-600">
+                      Word limit
+                      <input
+                        type="number"
+                        min={1}
+                        placeholder="—"
+                        value={r.wordLimit ?? ""}
+                        onChange={(e) =>
+                          patch(i, { wordLimit: Number(e.target.value) > 0 ? Math.round(Number(e.target.value)) : undefined })
+                        }
+                        className="ml-1 w-24 rounded-lg border border-slate-300 px-2 py-1.5"
+                      />
+                    </label>
+                  )}
                 </div>
+                {(r.type === "short" || r.type === "essay") && (
+                  <label className="mt-2 block text-sm text-slate-600">
+                    Model answer — what the marking is judged against, and what students read once you release
+                    <textarea
+                      value={r.feedbackCorrect ?? ""}
+                      onChange={(e) => patch(i, { feedbackCorrect: e.target.value || undefined })}
+                      rows={3}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                    />
+                  </label>
+                )}
               </div>
             );
           })}
@@ -544,7 +644,7 @@ export default function EditQuizPage() {
       <div className="mt-4 flex flex-wrap gap-2">
         <button
           onClick={() => save(false)}
-          disabled={saving}
+          disabled={saving || rubricBlocked}
           className="rounded-lg bg-slate-900 px-6 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
         >
           {saving ? "Saving…" : "Save changes"}

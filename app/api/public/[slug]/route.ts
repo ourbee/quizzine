@@ -48,6 +48,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
     media: qn.media,
     points: qn.points,
     graded: isGraded(qn),
+    wordLimit: qn.wordLimit,
     options: qn.options.map((o) => ({ key: o.key, text: o.text })),
   }));
 
@@ -70,12 +71,19 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
       groupMin: settings.groupMin,
       groupMax: settings.groupMax,
       multiScoring: settings.multiScoring,
+      pasteGuard: !!settings.pasteGuard,
+      hardWordLimit: !!settings.hardWordLimit,
     },
     questionCount: mst ? Math.min(questions.length, mst.stages * mst.perStage) : questions.length,
     totalPoints: mst ? undefined : maxPoints(questions),
     mst: mst ? { stages: mst.stages, perStage: mst.perStage } : undefined,
     survey: settings.gradingMode === "survey" || isSurvey(questions),
     peerReview: settings.gradingMode === "peer",
+    // Nothing is marked as the student answers; the teacher marks against the
+    // rubric and releases. The model answer never reaches the browser before
+    // then, which is why marks wait for the release rather than appearing at
+    // submission — see lib/rubric.ts.
+    rubricMode: settings.gradingMode === "rubric",
     phase,
     closed,
     questions: closed || mst ? [] : sanitized,
