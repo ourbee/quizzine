@@ -326,7 +326,7 @@ export default function ExamShell({
               <span className="text-slate-500">Remaining Time :</span>
               <span
                 className={`rounded px-2 py-0.5 font-mono font-bold tabular-nums text-white ${
-                  remainingMs < 60_000 ? "bg-red-600" : "bg-sky-500"
+                  remainingMs < 60_000 ? "bg-red-600" : remainingMs < 5 * 60_000 ? "bg-amber-500" : "bg-sky-500"
                 }`}
               >
                 {fmtExamClock(remainingMs)}

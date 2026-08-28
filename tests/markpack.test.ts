@@ -166,3 +166,40 @@ test("the remainder package holds only the unmarked responses, under their origi
   assert.match(remainder.parts[0].text, /R2/);
   assert.ok(!/\bR1\b/.test(remainder.parts[0].text));
 });
+
+test("unescaped quotes inside a value are repaired rather than rejected", () => {
+  // What a marker discussing words actually writes, and what no JSON parser
+  // will accept: the student is being quoted back inside a quoted string.
+  const reply =
+    '[{"code":"R1","scores":{"a1":10},"strengths":"Good.","improvements":"More.",' +
+    '"corrections":""greek" should be capitalized as "Greek"; "though off" should be "thought of".",' +
+    '"oneThing":"Define, then explain."}]';
+  const parsed = extractJson(reply) as { corrections: string }[];
+  assert.equal(Array.isArray(parsed), true);
+  assert.equal(parsed.length, 1);
+  // The quotation marks survive into the feedback the student reads.
+  assert.match(parsed[0].corrections, /"greek" should be capitalized as "Greek"/);
+});
+
+test("a repaired reply still marks, and still refuses a code it never issued", () => {
+  const reply = '[{"code":"R1","scores":{"a1":10},"corrections":"say "this" not "that"."},{"code":"R9","scores":{"a1":1}}]';
+  const result = parseAiReply(reply, ["R1"], { a1: 10 });
+  assert.equal(result.marks.length, 1);
+  assert.equal(result.marks[0].code, "R1");
+  assert.equal(result.rejected.length, 1);
+  assert.equal(result.rejected[0].code, "R9");
+});
+
+test("valid JSON is never put through the repair", () => {
+  // A value that legitimately ends on a quoted word: the repair would mangle
+  // it, so a strict parse has to win first.
+  const reply = '[{"code":"R1","scores":{"a1":5},"oneThing":"Read the chapter called \\"Xenia\\""}]';
+  const parsed = extractJson(reply) as { oneThing: string }[];
+  assert.equal(parsed[0].oneThing, 'Read the chapter called "Xenia"');
+});
+
+test("a reply that will not parse says so, rather than claiming there was no JSON", () => {
+  const result = parseAiReply('[{"code":"R1","scores":{"a1":', ["R1"], { a1: 10 });
+  assert.match(result.error ?? "", /could not be read/);
+  assert.deepEqual(result.unmarked, ["R1"]);
+});

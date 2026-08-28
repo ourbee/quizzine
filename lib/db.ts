@@ -96,6 +96,24 @@ ALTER TABLE attempts ADD COLUMN IF NOT EXISTS marking jsonb;
 -- How a written answer was typed: counts only, never content. See lib/telemetry.ts.
 ALTER TABLE attempts ADD COLUMN IF NOT EXISTS telemetry jsonb;
 
+-- Handing a quiz to a colleague. The recipient gets their OWN copy: a new id, a
+-- new link, a new response pool. Nothing is shared afterwards — a copy is a
+-- gift, not a subscription — which is what keeps one teacher's students off
+-- another teacher's dashboard. The copy remembers where it came from, and the
+-- sender keeps a record of having sent it even if the copy is later deleted.
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS shared_from text;
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS shared_by text;
+CREATE TABLE IF NOT EXISTS quiz_shares (
+  id text PRIMARY KEY,
+  source_quiz_id text NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+  -- Deliberately not a foreign key: the record of the gift outlives the copy.
+  copy_quiz_id text NOT NULL,
+  shared_by text NOT NULL,
+  shared_with text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS quiz_shares_source_idx ON quiz_shares(source_quiz_id);
+
 CREATE TABLE IF NOT EXISTS teacher_invites (
   email text PRIMARY KEY,
   invited_by text NOT NULL,

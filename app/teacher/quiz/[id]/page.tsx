@@ -13,6 +13,7 @@ import QRCode from "qrcode";
 import { correctKeysOf, isChoice, isGraded, isSurvey, splitKeys } from "@/lib/questions";
 import { semesterLabel } from "@/lib/normalize";
 import PeerReviewPanel from "@/components/PeerReviewPanel";
+import SharePanel from "@/components/SharePanel";
 import type { AttemptFlags, GroupInfo, PerQuestionResult, Question, QuizSettings, StudentInfo } from "@/lib/types";
 
 interface QuizRow {
@@ -26,6 +27,8 @@ interface QuizRow {
   accepting: boolean;
   created_at: string;
   phase?: string | null;
+  /** Set when this quiz arrived as a colleague's copy — see the share route. */
+  shared_by?: string | null;
 }
 
 interface AttemptRow {
@@ -219,6 +222,14 @@ export default function QuizDetailPage() {
           <p className="text-sm text-slate-500 mt-0.5">
             {quiz.questions.length} questions · created {new Date(quiz.created_at).toLocaleDateString()}
           </p>
+          {quiz.shared_by && (
+            // Said on the copy itself, because "why does my colleague's edit not
+            // show up here?" is only a puzzle if nobody said it was a copy.
+            <p className="mt-1 text-sm text-slate-600">
+              Copied to you by <span className="font-medium">{quiz.shared_by}</span> — it is yours now, and editing it
+              does not change theirs.
+            </p>
+          )}
         </div>
         <div className="flex gap-2 flex-wrap">
           <Link
@@ -270,6 +281,8 @@ export default function QuizDetailPage() {
           Open as student
         </a>
       </div>
+      <SharePanel quizId={quiz.id} questionCount={quiz.questions.length} />
+
       {showQr && qr && (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={qr} alt="QR code" className="mt-3 w-64 h-64 rounded-xl border border-slate-200 bg-white p-2" />

@@ -90,6 +90,7 @@ function instructions(rubric: RubricConfig, weights: Record<string, number>, par
     "5. You cannot check facts against the source, because you do not have it — you would be checking from memory, and memory is exactly what this rubric tells a marker not to trust. So DO NOT penalise a claim merely because you cannot verify it. Instead, name it in `corrections` as something the teacher should check, and mark factual accuracy on what you can actually judge (internal consistency, obvious error, claims the passage or model answer contradict).",
     "6. Judge each response on its own against the rubric, not against the other responses.",
     "7. Do not write anything outside the JSON. No preamble, no summary, no commentary.",
+    "8. Inside a feedback field, quote the student with SINGLE quotes ('greek' should be 'Greek'), never double ones. A raw double quote inside a value breaks the JSON and the whole batch has to be marked again.",
     "",
     part.total > 1
       ? `This is part ${part.index} of ${part.total} for this question. Mark only the responses given below. Use a FRESH CHAT for each part — a long conversation marks the later responses worse than the earlier ones.`
@@ -271,6 +272,66 @@ export interface ParseResult {
 }
 
 /**
+ * Re-escape stray double quotes inside string values.
+ *
+ * A marker quoting the student back — `"corrections": ""greek" should be
+ * "Greek""` — writes something no JSON parser will accept, and it is the single
+ * commonest way a reply arrives broken: the model is discussing words, and
+ * words in this subject come in quotation marks.
+ *
+ * A quote is read as closing its string only when the next thing that is not
+ * whitespace is a comma, a colon, a closing brace or bracket, or the end of the
+ * text. Anything else means the writer was quoting, so the quote is escaped and
+ * the string carries on. That guess is wrong for a value that genuinely ends in
+ * a quoted word mid-object, which is why this only ever runs after a strict
+ * parse has already failed: correct JSON is never put through it.
+ */
+export function repairStrayQuotes(text: string): string {
+  const out: string[] = [];
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\" && inString) {
+      out.push(ch, text[i + 1] ?? "");
+      i += 1;
+      continue;
+    }
+    if (ch !== '"') {
+      out.push(ch);
+      continue;
+    }
+    if (!inString) {
+      inString = true;
+      out.push(ch);
+      continue;
+    }
+    let j = i + 1;
+    while (j < text.length && /\s/.test(text[j])) j += 1;
+    const next = text[j];
+    if (next === undefined || next === "," || next === ":" || next === "}" || next === "]") {
+      inString = false;
+      out.push(ch);
+    } else {
+      out.push('\\"');
+    }
+  }
+  return out.join("");
+}
+
+/** Strict first, repaired second — correct JSON never goes through the repair. */
+function parseLenient(slice: string): unknown | undefined {
+  try {
+    return JSON.parse(slice);
+  } catch {
+    try {
+      return JSON.parse(repairStrayQuotes(slice));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+/**
  * Pull the JSON out of a chat reply. Models wrap their answer in prose, in
  * fences, or in both; the array is found by bracket matching rather than by a
  * regular expression, so a bracket inside a quoted comment cannot end it early.
@@ -306,11 +367,9 @@ export function extractJson(reply: string): unknown | null {
         else if (ch === close) {
           depth -= 1;
           if (depth === 0) {
-            try {
-              return JSON.parse(candidate.slice(start, i + 1));
-            } catch {
-              break; // try the next candidate/shape rather than guessing
-            }
+            const parsed = parseLenient(candidate.slice(start, i + 1));
+            if (parsed !== undefined) return parsed;
+            break; // try the next candidate/shape rather than guessing
           }
         }
       }
@@ -352,11 +411,9 @@ function salvageObjects(text: string): unknown[] {
     } else if (ch === "}") {
       depth -= 1;
       if (depth === 0 && start >= 0) {
-        try {
-          out.push(JSON.parse(text.slice(start, i + 1)));
-        } catch {
-          // Not an object we can use; the next one may still be.
-        }
+        const parsed = parseLenient(text.slice(start, i + 1));
+        // Not an object we can use? The next one may still be.
+        if (parsed !== undefined) out.push(parsed);
         start = -1;
       }
       if (depth < 0) depth = 0;
@@ -388,7 +445,11 @@ export function parseAiReply(
       marks: [],
       rejected: [],
       unmarked: [...expectedCodes],
-      error: "No JSON was found in that reply. Copy the model's whole answer, including the square brackets.",
+      // Two different failures, and the fix differs: half a reply is a copying
+      // problem, a reply that will not parse is the model's problem.
+      error: /[[{]/.test(reply)
+        ? "That reply has JSON in it, but it could not be read — usually a response cut off part-way, or quotation marks the model forgot to escape. Ask it to send the JSON again on its own, or paste the part that is complete."
+        : "No JSON was found in that reply. Copy the model's whole answer, including the square brackets.",
     };
   }
 

@@ -81,6 +81,19 @@ interface ActiveAttempt {
   candidate?: string;
 }
 
+/**
+ * How long before the deadline a student is told, largest first.
+ *
+ * A warning that interrupts is worse than no warning: it steals the keyboard
+ * from someone mid-sentence, which is exactly the person it is for. So these
+ * raise a banner beside the work, announced politely, dismissable, and gone on
+ * their own after a few seconds — the clock in the bar is the running record.
+ * A threshold is skipped when the whole paper is shorter than it, because
+ * "5 minutes left" on a 3-minute quiz is noise.
+ */
+const WARN_BEFORE_MS = [5 * 60_000, 60_000];
+const WARNING_VISIBLE_MS = 12_000;
+
 function fmtClock(ms: number): string {
   const s = Math.max(0, Math.ceil(ms / 1000));
   const m = Math.floor(s / 60);
@@ -109,6 +122,12 @@ export default function StudentQuizPage() {
   const [index, setIndex] = useState(0); // per-question mode
   const [now, setNow] = useState(Date.now());
   const [qDeadline, setQDeadline] = useState<number | null>(null); // per-question deadline
+  /** Thresholds already announced, so a warning is raised once and not again. */
+  const [warned, setWarned] = useState<number[]>([]);
+  /** Milliseconds left at the moment a warning was raised; null when none is up. */
+  const [warning, setWarning] = useState<number | null>(null);
+  /** The clock, not the student, ended this attempt — said plainly afterwards. */
+  const [timedOut, setTimedOut] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [review, setReview] = useState<ReviewPayload | null>(null);
@@ -386,6 +405,7 @@ export default function StudentQuizPage() {
   useEffect(() => {
     if (phase !== "taking") return;
     if (attempt?.deadlineAt && now >= attempt.deadlineAt) {
+      setTimedOut(true);
       submit();
       return;
     }
@@ -394,6 +414,27 @@ export default function StudentQuizPage() {
       else submit();
     }
   }, [now, phase, attempt, qDeadline, perQuestionMode, index, ordered.length, submit]);
+
+  // ------- "you have five minutes left", said quietly -------
+  useEffect(() => {
+    if (phase !== "taking" || !attempt?.deadlineAt) return;
+    const left = attempt.deadlineAt - now;
+    if (left <= 0) return;
+    const whole = (quiz?.settings.maxMinutes ?? 0) * 60_000;
+    const due = WARN_BEFORE_MS.find((t) => left <= t && whole > t && !warned.includes(t));
+    if (due === undefined) return;
+    setWarned((list) => [...list, due]);
+    // The time actually left, not the threshold that fired: a student who
+    // reopens the tab at 4:12 should be told four minutes, not five.
+    setWarning(left);
+  }, [now, phase, attempt, quiz?.settings.maxMinutes, warned]);
+
+  // Gone on its own: a banner left standing over the paper becomes furniture.
+  useEffect(() => {
+    if (warning === null) return;
+    const t = setTimeout(() => setWarning(null), WARNING_VISIBLE_MS);
+    return () => clearTimeout(t);
+  }, [warning]);
 
   async function start(e: React.FormEvent) {
     e.preventDefault();
@@ -459,6 +500,12 @@ export default function StudentQuizPage() {
     return (
       <div style={pageStyle} className="py-10 px-4 flex-1">
         <main className="max-w-2xl mx-auto">
+          {/* Said plainly: the clock ended this, not a mis-click. */}
+          {timedOut && (
+            <p className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-center text-sm font-medium text-amber-900">
+              Time was up, so your answers were submitted for you. Everything you had written was sent.
+            </p>
+          )}
           <div className="rounded-2xl border p-6 text-center shadow-sm print-page" style={cardStyle}>
             <p className="text-sm font-medium" style={{ color: theme.muted }}>{review.quizTitle}</p>
             {review.group ? (
@@ -1100,9 +1147,42 @@ export default function StudentQuizPage() {
     </div>
   );
 
+  /*
+   * Beside the work, never over it. Fixed to the foot of the screen so it can
+   * never take the caret or cover what is being typed, `role="status"` with a
+   * polite live region so a screen reader finishes the sentence it is reading
+   * before mentioning it, and dismissable — a student who has seen it should
+   * not have to keep seeing it.
+   */
+  const timeWarning =
+    warning === null ? null : (
+      <div className="fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
+        <div
+          role="status"
+          aria-live="polite"
+          className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 text-sm shadow-lg ${
+            warning <= 60_000 ? "border-red-300 bg-red-50 text-red-900" : "border-amber-300 bg-amber-50 text-amber-900"
+          }`}
+        >
+          <span className="font-semibold">
+            {warning <= 60_000 ? "One minute left." : `${Math.max(1, Math.round(warning / 60_000))} minutes left.`}
+          </span>
+          <span>Your answers are submitted automatically when the time is up — keep writing.</span>
+          <button
+            onClick={() => setWarning(null)}
+            aria-label="Dismiss"
+            className="rounded px-2 py-0.5 font-bold opacity-60 hover:opacity-100"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    );
+
   // ------- exam interface -------
   if (examMode) {
     return (
+      <>
       <ExamShell
         questions={ordered}
         attemptId={attempt?.attemptId ?? ""}
@@ -1135,11 +1215,14 @@ export default function StudentQuizPage() {
             : undefined
         }
       />
+      {timeWarning}
+      </>
     );
   }
 
   return (
     <div style={pageStyle} className="pb-12 flex-1">
+      {timeWarning}
       <div className="sticky top-0 z-10 border-b backdrop-blur px-4 py-3" style={{ background: `${theme.card}ee`, borderColor: theme.border }}>
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-3 text-sm">
           <p className="font-semibold truncate">{quiz.title}</p>
@@ -1154,7 +1237,13 @@ export default function StudentQuizPage() {
               <span className={`font-mono font-bold ${qDeadline - now < 10_000 ? "text-red-600" : ""}`}>{fmtClock(qDeadline - now)}</span>
             )}
             {!perQuestionMode && overallRemaining !== null && (
-              <span className={`font-mono font-bold ${overallRemaining < 60_000 ? "text-red-600" : ""}`}>{fmtClock(overallRemaining)}</span>
+              <span
+                className={`font-mono font-bold ${
+                  overallRemaining < 60_000 ? "text-red-600" : overallRemaining < 5 * 60_000 ? "text-amber-600" : ""
+                }`}
+              >
+                {fmtClock(overallRemaining)}
+              </span>
             )}
           </div>
         </div>
