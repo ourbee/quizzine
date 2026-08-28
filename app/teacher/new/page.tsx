@@ -19,9 +19,11 @@ import { DEFAULT_MST, mstCapacity, type MstConfig } from "@/lib/mst";
 import { TAG_PRESETS, buildVocabulary, difficultyLabel, tagNearMisses, type TagNearMiss } from "@/lib/tags";
 import { DEFAULT_RUBRIC, rubricErrors, type RubricConfig } from "@/lib/rubric";
 import { THEMES } from "@/lib/themes";
-import type { GradingMode, MultiScoring, ParsedQuiz, Question, TimerMode } from "@/lib/types";
+import type { GradingMode, MultiScoring, ParsedQuiz, Question, RawQuestion, TimerMode } from "@/lib/types";
 import Material from "@/components/Material";
 import Media from "@/components/Media";
+import PeerEditor from "@/components/PeerEditor";
+import QuestionEditor, { blankQuestion, stripEditing, toEditable, type EditableQuestion } from "@/components/QuestionEditor";
 import RubricEditor from "@/components/RubricEditor";
 
 type Step = "intake" | "review" | "settings" | "done";
@@ -37,7 +39,7 @@ interface Draft {
   autoSurvey: boolean;
   title: string;
   description: string;
-  questions: Question[];
+  questions: EditableQuestion[];
   errors: string[];
   warnings: string[];
   /**
@@ -48,6 +50,8 @@ interface Draft {
    */
   excluded: boolean;
   open: boolean;
+  /** Reading the questions as students will, or writing them. */
+  editing: boolean;
 }
 
 interface PublishResult {
@@ -267,6 +271,52 @@ export default function NewQuizPage() {
     );
   }
 
+  /**
+   * Put edited questions back into the loose shape a file arrives in, so that
+   * everything downstream — the validator, a later switch between scored and
+   * unscored — reads a hand-written question exactly as it reads an uploaded
+   * one. There is only one definition of a valid question, and this is how an
+   * edit reaches it.
+   */
+  function rawOf(list: Question[]): RawQuestion[] {
+    return list.map((qn) => ({
+      text: qn.text,
+      type: qn.type,
+      passage: qn.passage,
+      passageTitle: qn.passageTitle,
+      media: qn.media,
+      options: qn.options,
+      correct: qn.type === "multi" ? correctKeysOf(qn).join(",") : qn.correct,
+      graded: isGraded(qn),
+      // Zero marks on an unscored question is the validator's own doing, not
+      // something the teacher typed, so it is left blank for it to fill in
+      // again if the question is ever scored.
+      points: qn.points > 0 ? qn.points : "",
+      feedbackCorrect: qn.feedbackCorrect,
+      feedbackIncorrect: qn.feedbackIncorrect,
+      tags: qn.tags,
+      difficulty: qn.difficulty,
+      wordLimit: qn.wordLimit,
+    }));
+  }
+
+  /**
+   * Take the editor's questions as they stand and re-check them. What the
+   * teacher typed is kept exactly as typed — a question is never rewritten or
+   * dropped mid-sentence — and the validator's verdict is shown alongside it as
+   * the list of things still to fix.
+   */
+  function editQuestions(draftId: string, next: EditableQuestion[]) {
+    setDrafts((list) =>
+      list.map((d) => {
+        if (d.id !== draftId) return d;
+        const parsed: ParsedQuiz = { ...d.parsed, questions: rawOf(stripEditing(next)) };
+        const result = validateQuestions(parsed, d.gradingMode);
+        return { ...d, parsed, questions: next, errors: result.errors, warnings: result.warnings };
+      })
+    );
+  }
+
   /** Edit one question inside one draft — word limits and weight overrides. */
   function patchQuestion(draftId: string, qid: string, patch: Partial<Question>) {
     setDrafts((list) =>
@@ -304,11 +354,12 @@ export default function NewQuizPage() {
         autoSurvey,
         title: parsed.title?.trim() || fallback,
         description: parsed.description ?? "",
-        questions: result.questions,
+        questions: result.questions.map(toEditable),
         errors: result.errors,
         warnings: [...result.warnings, ...(parsed.notes ?? [])],
         excluded: false,
         open: !many,
+        editing: false,
       };
     });
     setDrafts(built);
@@ -325,7 +376,13 @@ export default function NewQuizPage() {
           ...d,
           gradingMode,
           autoSurvey: false,
-          questions: result.questions,
+          // Revalidation drops anything that cannot be read at all — a question
+          // half-written in the editor, say — so the rewritten list is taken
+          // only when it still accounts for every question the teacher has.
+          questions:
+            result.questions.length === d.questions.length
+              ? result.questions.map((qn, i) => ({ ...qn, tagText: d.questions[i].tagText }))
+              : d.questions,
           errors: result.errors,
           warnings: [...result.warnings, ...(d.parsed.notes ?? [])],
         };
@@ -398,40 +455,43 @@ export default function NewQuizPage() {
   }
 
   /**
-   * Start from a blank written answer rather than a file. Rubric marking is
-   * pre-selected because that is the whole reason for this door — and the
-   * question is a real one, seeded so the first thing on screen is something to
-   * edit rather than an empty box.
+   * Start from nothing rather than from a file. Each door seeds one real
+   * question of the kind asked for — the first thing on screen is then
+   * something to edit rather than an empty box — and picks the marking that
+   * kind implies, which the teacher can still change on the next screen.
    */
-  function startWrittenAnswers() {
-    const parsed: ParsedQuiz = {
-      title: "",
-      questions: [
-        {
-          text: "Write your question here.",
-          type: "essay",
-          options: [],
-          points: 10,
-          feedbackCorrect: "",
-          wordLimit: 250,
-        },
-      ],
-    };
-    const result = validateQuestions(parsed, "rubric");
+  function startFromScratch(kind: "written" | "mcq" | "poll") {
+    const seeded: Question[] =
+      kind === "written"
+        ? [{ ...blankQuestion("essay"), id: "q1", text: "Write your question here.", points: 10, wordLimit: 250 }]
+        : [
+            {
+              ...blankQuestion("mcq", kind === "mcq"),
+              id: "q1",
+              text: "Write your question here.",
+              options: ["A", "B", "C", "D"].map((key) => ({ key, text: `Option ${key}` })),
+            },
+          ];
+    const gradingMode: GradingMode = kind === "written" ? "rubric" : kind === "poll" ? "survey" : "graded";
+    const parsed: ParsedQuiz = { title: "", questions: rawOf(seeded) };
+    const result = validateQuestions(parsed, gradingMode);
     setDrafts([
       {
-        id: `d${Date.now()}-w`,
-        source: "Written answers",
+        id: `d${Date.now()}-s`,
+        source: kind === "written" ? "Written answers" : kind === "poll" ? "Poll" : "Multiple choice",
         parsed,
-        gradingMode: "rubric",
+        gradingMode,
         autoSurvey: false,
         title: "",
         description: "",
-        questions: result.questions,
+        questions: (result.questions.length ? result.questions : seeded).map(toEditable),
         errors: result.errors,
         warnings: result.warnings,
         excluded: false,
         open: true,
+        // Straight into the editor: someone starting from scratch has nothing
+        // to preview yet, they have a question to write.
+        editing: true,
       },
     ]);
     setStep("review");
@@ -487,7 +547,7 @@ export default function NewQuizPage() {
             description: draft.description,
             introMedia,
             preset: preset || undefined,
-            questions: draft.questions,
+            questions: stripEditing(draft.questions),
             theme,
             // Scored vs survey is a property of the questions, so it travels per quiz.
             settings: { ...settings, gradingMode: draft.gradingMode },
@@ -650,16 +710,27 @@ export default function NewQuizPage() {
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-sm font-semibold text-slate-900">Or start from scratch</p>
             <div className="mt-2 flex flex-wrap gap-2">
-              <button
-                onClick={startWrittenAnswers}
-                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
-              >
-                Written answers
-              </button>
+              {(
+                [
+                  ["mcq", "Multiple choice"],
+                  ["written", "Written answers"],
+                  ["poll", "Poll"],
+                ] as ["mcq" | "written" | "poll", string][]
+              ).map(([kind, label]) => (
+                <button
+                  key={kind}
+                  onClick={() => startFromScratch(kind)}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  {label}
+                </button>
+              ))}
             </div>
             <p className="mt-2 text-xs text-slate-500">
-              One essay question, marked against a rubric — with an optional AI pass you review, never one that marks on
-              your behalf. Add more questions by uploading a file, or edit this one and publish it as it is.
+              One question to start with, opened straight in the editor: a marked multiple-choice question, an essay
+              marked against a rubric (with an optional AI pass you review, never one that marks on your behalf), or a
+              poll whose answers are collected and never marked. Add as many more as you like there, change any
+              question&rsquo;s type as you go, or upload a file instead.
             </p>
           </div>
 
@@ -923,15 +994,45 @@ export default function NewQuizPage() {
                         {draft.questions.length} question{draft.questions.length === 1 ? "" : "s"} ·{" "}
                         {points === 0 ? "not scored" : `${points} point${points === 1 ? "" : "s"}`}
                       </p>
-                      <button
-                        onClick={() => updateDraft(draft.id, { open: !draft.open })}
-                        className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                      >
-                        {draft.open ? "Hide questions" : "Preview questions"}
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => updateDraft(draft.id, { open: true, editing: true })}
+                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                            draft.open && draft.editing
+                              ? "bg-slate-900 text-white"
+                              : "border border-slate-300 text-slate-700 hover:bg-slate-100"
+                          }`}
+                        >
+                          Write questions
+                        </button>
+                        <button
+                          onClick={() => updateDraft(draft.id, { open: true, editing: false })}
+                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                            draft.open && !draft.editing
+                              ? "bg-slate-900 text-white"
+                              : "border border-slate-300 text-slate-700 hover:bg-slate-100"
+                          }`}
+                        >
+                          Preview
+                        </button>
+                        <button
+                          onClick={() => updateDraft(draft.id, { open: false })}
+                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                        >
+                          Hide
+                        </button>
+                      </div>
                     </div>
 
-                    {draft.open && (
+                    {draft.open && draft.editing && (
+                      <QuestionEditor
+                        questions={draft.questions}
+                        onChange={(next) => editQuestions(draft.id, next)}
+                        unscored={survey || draft.gradingMode === "peer"}
+                      />
+                    )}
+
+                    {draft.open && !draft.editing && (
                       <>
                         <p className="text-sm text-slate-500">
                           This is how they will read (correct answers marked here only — students never receive them before submitting).
@@ -1006,24 +1107,23 @@ export default function NewQuizPage() {
 
           <div className="rounded-xl border border-slate-200 bg-white p-4">{reviewActions}</div>
 
-          {drafts.length > 2 && (
-            <div className="fixed bottom-5 right-4 flex flex-col gap-2">
-              <button
-                onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-                aria-label="Jump to top"
-                className="h-11 w-11 rounded-full bg-slate-900 text-lg font-bold text-white shadow-lg hover:bg-slate-700"
-              >
-                ↑
-              </button>
-              <button
-                onClick={() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" })}
-                aria-label="Jump to bottom"
-                className="h-11 w-11 rounded-full bg-slate-900 text-lg font-bold text-white shadow-lg hover:bg-slate-700"
-              >
-                ↓
-              </button>
-            </div>
-          )}
+          {/* A single scratch-built quiz gets long in the editor too, so these are always here. */}
+          <div className="fixed bottom-5 right-4 flex flex-col gap-2">
+            <button
+              onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+              aria-label="Jump to top"
+              className="h-11 w-11 rounded-full bg-slate-900 text-lg font-bold text-white shadow-lg hover:bg-slate-700"
+            >
+              ↑
+            </button>
+            <button
+              onClick={() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" })}
+              aria-label="Jump to bottom"
+              className="h-11 w-11 rounded-full bg-slate-900 text-lg font-bold text-white shadow-lg hover:bg-slate-700"
+            >
+              ↓
+            </button>
+          </div>
         </section>
       )}
 
@@ -1239,115 +1339,7 @@ export default function NewQuizPage() {
                 <span className="font-semibold text-slate-700">{peerMaxScore(peer.criteria, peerQuestionCount)} marks</span>{" "}
                 ({peerQuestionCount} reviewed question{peerQuestionCount === 1 ? "" : "s"}).
               </p>
-              <div className={`space-y-2 ${peerFromRubric ? "hidden" : ""}`}>
-                {peer.criteria.map((c, i) => (
-                  <div key={c.id} className="flex flex-wrap items-center gap-2">
-                    <input
-                      value={c.label}
-                      onChange={(e) =>
-                        setPeer((p) => ({
-                          ...p,
-                          criteria: p.criteria.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)),
-                        }))
-                      }
-                      placeholder="Criterion, e.g. Evidence"
-                      className="min-w-48 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    />
-                    <label className="text-xs text-slate-500">
-                      out of
-                      <input
-                        type="number"
-                        min={1}
-                        max={100}
-                        value={c.max}
-                        onChange={(e) =>
-                          setPeer((p) => ({
-                            ...p,
-                            criteria: p.criteria.map((x, j) => (j === i ? { ...x, max: Number(e.target.value) || 1 } : x)),
-                          }))
-                        }
-                        className="ml-2 w-20 rounded-lg border border-slate-300 px-2 py-2 text-sm text-slate-900"
-                      />
-                    </label>
-                    <button
-                      onClick={() => setPeer((p) => ({ ...p, criteria: p.criteria.filter((_, j) => j !== i) }))}
-                      disabled={peer.criteria.length < 2}
-                      className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-40"
-                      aria-label={`Remove ${c.label}`}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
-                <button
-                  onClick={() =>
-                    setPeer((p) => ({ ...p, criteria: [...p.criteria, { id: `c${Date.now()}`, label: "", max: 5 }] }))
-                  }
-                  disabled={peer.criteria.length >= 10}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
-                >
-                  Add criterion
-                </button>
-              </div>
-
-              <div className="grid gap-3 border-t border-slate-100 pt-3 sm:grid-cols-2">
-                <label className="text-sm text-slate-700">
-                  Reviewers per response
-                  <input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={peer.reviewsPerResponse}
-                    onChange={(e) => setPeer((p) => ({ ...p, reviewsPerResponse: Number(e.target.value) || 1 }))}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-                <label className="text-sm text-slate-700">
-                  Marks for completing your own reviews
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={peer.reviewPoints}
-                    onChange={(e) => setPeer((p) => ({ ...p, reviewPoints: Number(e.target.value) || 0 }))}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
-                  />
-                </label>
-              </div>
-              <div className="flex flex-wrap gap-2 text-sm">
-                {([["mean", "Average of reviewers"], ["median", "Median of reviewers"]] as const).map(([mode, label]) => (
-                  <button
-                    key={mode}
-                    onClick={() => setPeer((p) => ({ ...p, aggregate: mode }))}
-                    className={`rounded-lg px-4 py-2 font-medium ${peer.aggregate === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-xs text-slate-500">
-                {peer.aggregate === "mean"
-                  ? "Every reviewer counts equally towards the mark."
-                  : "The middle mark is taken, so one unusually harsh or generous reviewer cannot swing the result."}
-              </p>
-              <label className="flex items-center gap-2.5 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={peer.commentRequired}
-                  onChange={(e) => setPeer((p) => ({ ...p, commentRequired: e.target.checked }))}
-                  className="h-4 w-4"
-                />
-                A written comment is required on every part
-              </label>
-              <label className="flex items-center gap-2.5 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={peer.releaseFeedback}
-                  onChange={(e) => setPeer((p) => ({ ...p, releaseFeedback: e.target.checked }))}
-                  className="h-4 w-4"
-                />
-                Students may read their peers&apos; comments once you release the results
-              </label>
+              <PeerEditor value={peer} onChange={setPeer} hideCriteria={peerFromRubric} />
               <p className="rounded-lg border border-blue-200 bg-blue-50 p-2.5 text-xs text-blue-900">
                 Publishing opens the responding phase. When everyone has answered, come back to the quiz page and click
                 “Open peer review” — that is what hands the work out.

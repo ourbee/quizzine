@@ -117,6 +117,16 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     }
   }
 
+  // Group work: the bounds only mean anything while it is on, and are cleared
+  // with it so a quiz turned back to individual work carries nothing stale.
+  const groupMode = !!(body.settings?.groupMode ?? settingsBefore.groupMode);
+  const groupMin = groupMode
+    ? Math.min(50, Math.max(1, Math.floor(Number(body.settings?.groupMin ?? settingsBefore.groupMin)) || 1))
+    : undefined;
+  const groupMax = groupMode
+    ? Math.min(50, Math.max(groupMin ?? 1, Math.floor(Number(body.settings?.groupMax ?? settingsBefore.groupMax)) || groupMin || 1))
+    : undefined;
+
   const examMode = body.settings?.examMode ?? settingsBefore.examMode ?? false;
   const mstMode = body.settings?.mstMode ?? settingsBefore.mstMode ?? false;
   const rawTimerMode = ["none", "quiz", "question"].includes(body.settings?.timerMode)
@@ -165,6 +175,9 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     mst: mstMode ? normalizeMstConfig(body.settings?.mst ?? settingsBefore.mst) : undefined,
     closesAt: body.settings?.closesAt !== undefined ? body.settings.closesAt || undefined : settingsBefore.closesAt,
     allowMultiple: !!(body.settings?.allowMultiple ?? settingsBefore.allowMultiple),
+    groupMode,
+    groupMin,
+    groupMax,
   };
 
   const preset = body.preset !== undefined ? (findPreset(body.preset)?.id ?? null) : (stored.preset ?? null);
