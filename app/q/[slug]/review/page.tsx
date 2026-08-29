@@ -14,6 +14,7 @@ import { DESCRIPTORS, descriptorStep, descriptorValue } from "@/lib/rubric";
 import type { PeerCriterion, QuestionFeedback } from "@/lib/peer";
 import type { ReviewPayload } from "@/lib/types";
 import Material from "@/components/Material";
+import { percentOf, percentSuffix } from "@/lib/score";
 
 interface Feedback {
   total: number | null;
@@ -258,6 +259,11 @@ export default function PeerReviewPage() {
                 <p className="text-5xl font-bold" style={{ color: theme.accent }}>
                   {fb.total}
                   <span className="text-2xl font-semibold" style={{ color: theme.muted }}> / {fb.max}</span>
+                  {percentOf(fb.total, fb.max) !== null && (
+                    <span className="ml-2 text-2xl font-semibold" style={{ color: theme.muted }}>
+                      ({percentOf(fb.total, fb.max)}%)
+                    </span>
+                  )}
                 </p>
                 <p className="mt-2 text-sm" style={{ color: theme.muted }}>
                   {fb.teacherSet
@@ -312,14 +318,14 @@ export default function PeerReviewPage() {
                     <div key={c.id} className="flex items-baseline justify-between border-b px-3 py-2 text-sm last:border-b-0" style={{ borderColor: theme.border }}>
                       <span>{c.label}</span>
                       <span className="font-semibold">
-                        {c.average === null ? "—" : c.average} <span className="font-normal" style={{ color: theme.muted }}>/ {c.max}</span>
+                        {c.average === null ? "—" : c.average} <span className="font-normal" style={{ color: theme.muted }}>/ {c.max} {percentSuffix(c.average, c.max)}</span>
                       </span>
                     </div>
                   ))}
                   <div className="flex items-baseline justify-between px-3 py-2 text-sm font-semibold" style={{ background: theme.accentSoft }}>
                     <span>This question</span>
                     <span>
-                      {f.subtotal === null ? "—" : f.subtotal} <span className="font-normal" style={{ color: theme.muted }}>/ {f.subtotalMax}</span>
+                      {f.subtotal === null ? "—" : f.subtotal} <span className="font-normal" style={{ color: theme.muted }}>/ {f.subtotalMax} {percentSuffix(f.subtotal, f.subtotalMax)}</span>
                     </span>
                   </div>
                 </div>

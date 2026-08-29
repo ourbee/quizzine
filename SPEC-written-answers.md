@@ -87,15 +87,16 @@ The v1 AI reviewer. No key, no server calls, works with any chatbot.
 
 ### The package
 
-- **Unit: one question, its non-blank responses.** A quiz with 3 written questions offers 3 packages. Question-at-a-time marking is also what LLMs (like humans) grade most consistently.
-- Contents, in this order: strict output instructions and the required JSON shape → the rubric (with this question's weights) → question, passage, model answer, word limit → the responses, each labelled with a **short opaque code** (`R1`, `R2`, …) plus its word count. **No names or rolls ever enter a package** — the code→attempt map lives only in Quizzine, which is how anonymisation works in this mode.
+- **Three scopes, chosen by the teacher** (revised 2026-08-29): **this question** (every response to it), **this student** (one attempt's answers to every written question), or **whole quiz** (everything). Question scope remains the default and is described on screen as the one that marks most consistently — question-at-a-time marking is what LLMs, like humans, grade most evenly. The other two exist because a twelve-question paper otherwise costs twelve copy-paste round trips per class, and that cost is real. The trade-off is stated, not decided for the teacher.
+- Contents, in this order: strict output instructions and the required JSON shape → the rubric (with this question's weights) → question, passage, model answer, word limit → the responses, each labelled with a **short opaque code** (`R1`, `R2`, …) plus its word count. A package spanning more than one question uses **cell codes** — `R3Q2` is response 3's answer to question 2 — so a code names an *answer*, not a student; single-question packages keep the plain `R3`. Codes are fixed by position, so a blank answer or a remainder filter never renumbers what follows it. **No names or rolls ever enter a package** — the code→answer map lives only in Quizzine, which is how anonymisation works in this mode.
 - The instructions tell the model to: score every parameter within its weight, fill the four feedback fields, penalise word-limit overrun under Band D, **flag unverifiable factual claims rather than penalise them** (the rubric's own "check against the source, not from memory" rule — an unaided LLM is exactly "from memory"), and return **only** a JSON array keyed by the codes.
 - One click copies the whole package.
 
 ### Size, splitting, and model degradation
 
 - Quizzine estimates package size. Beyond a **word budget (~8,000 response-words, configurable constant)** it splits the question into **parts** — "Copy part 1 of 3" — each part fully self-contained (instructions + rubric + question + model answer + its subset of responses; codes continue `R1…R30` across parts, unique per question).
-- The UI advises **a fresh chat per part** — long conversations degrade marking quality toward the tail. This is also why the mega-package (whole quiz in one paste) is not offered: it saves two pastes and costs attention across a 25k-word dump.
+- The UI advises **a fresh chat per part** — long conversations degrade marking quality toward the tail. The whole-quiz package is offered but splits by the same budget, so "whole quiz" never means one impossible paste; batch cells are ordered **question-major**, so a part still holds one question's answers side by side wherever the budget allows.
+- Per-question weight overrides survive a multi-question package: the rubric is printed once, and any question that caps a parameter differently states its own maximums, which the paste-back parser then clamps against.
 - Known limitation, stated in the UI: parts marked in separate chats can drift slightly relative to each other. The teacher review pass (suggestions, not verdicts) is the correction for that.
 
 ### The paste-back parser
@@ -109,7 +110,9 @@ Teacher pastes the LLM's reply into a box on the marking screen. The parser:
 - **accumulates and is idempotent**: multiple pastes fill in; re-pasting a code overwrites that code's AI suggestion only;
 - stores results as reviewer `"ai"` in `marking` (§4) — suggestions on the marking screen, nothing released.
 
-Scenario coverage: one question × many students = the native case; many questions × one student = that student's answers ride in each question's package, their result assembles itself; skipped questions = simply absent from packages and marked "no response" (§5).
+- refuses a bare `R3` in a multi-question package with a reason that names the fix, rather than guessing which question was meant.
+
+Scenario coverage: one question × many students, one student × many questions, and the whole quiz are each a scope of their own; skipped questions are simply absent from packages and marked "no response" (§5).
 
 ### 6b. Later stage (NOT v1): direct Gemini calls
 

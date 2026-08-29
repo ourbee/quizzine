@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { PeerCriterion, QuizPhase } from "@/lib/peer";
+import { scoreLabel } from "@/lib/score";
 
 interface Outcome {
   attemptId: string;
@@ -232,7 +233,7 @@ export default function PeerReviewPanel({
                     {o.reviewsIn} / {o.reviewsAssigned}
                   </td>
                   <td className="px-4 py-2.5">
-                    {o.peerScore === null ? <span className="text-slate-400">—</span> : `${o.peerScore} / ${data.rubricMax}`}
+                    {o.peerScore === null ? <span className="text-slate-400">—</span> : scoreLabel(o.peerScore, data.rubricMax)}
                   </td>
                   <td className="px-4 py-2.5">
                     <span className={o.reviewsOwed && o.reviewsDone < o.reviewsOwed ? "text-amber-700" : "text-slate-600"}>
@@ -241,7 +242,7 @@ export default function PeerReviewPanel({
                     {o.reviewCredit > 0 && <span className="ml-1 text-xs text-green-700">+{o.reviewCredit}</span>}
                   </td>
                   <td className="px-4 py-2.5 font-semibold">
-                    {o.finalScore} / {data.max}
+                    {scoreLabel(o.finalScore, data.max)}
                     {o.teacherScore !== null && <span className="ml-1 text-xs font-medium text-blue-700">yours</span>}
                   </td>
                   <td className="px-4 py-2.5">
@@ -291,7 +292,7 @@ export default function PeerReviewPanel({
                     <span className="font-semibold text-slate-700">{r.of}</span>
                     {r.status === "submitted" ? (
                       <>
-                        {" "}· {r.total} / {data.rubricMax}
+                        {" "}· {scoreLabel(r.total, data.rubricMax)}
                         {r.outlier && <span className="ml-1 font-semibold text-amber-800">— well away from the other reviewers</span>}
                       </>
                     ) : (

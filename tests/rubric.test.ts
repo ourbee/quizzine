@@ -5,6 +5,7 @@
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
+import { percentOf, percentSuffix, scoreLabel } from "../lib/score.ts";
 import {
   DEFAULT_RUBRIC,
   RUBRIC_PRESETS,
@@ -132,4 +133,28 @@ test("the descriptor scale maps five steps onto a criterion's weight", () => {
   assert.equal(descriptorStep(20, 40), 2);
   // A score entered numerically that sits off the scale is not forced onto it.
   assert.equal(descriptorStep(17, 40), null);
+});
+
+// ---------- percentages beside marks ----------
+
+test("a mark out of an uneven total carries its percentage", () => {
+  assert.equal(scoreLabel(8, 13), "8 / 13 (62%)");
+  assert.equal(percentSuffix(8, 13), "(62%)");
+  assert.equal(percentOf(8, 13), 62);
+});
+
+test("a mark out of nothing keeps the mark and drops the bracket, rather than claiming 0%", () => {
+  assert.equal(scoreLabel(0, 0), "0 / 0");
+  assert.equal(percentSuffix(3, 0), "");
+  assert.equal(percentOf(3, 0), null);
+  assert.equal(percentOf(3, null), null);
+});
+
+test("a missing score is a zero, not a blank — the total is what makes it meaningful", () => {
+  assert.equal(scoreLabel(null, 20), "0 / 20 (0%)");
+  assert.equal(scoreLabel(20, 20), "20 / 20 (100%)");
+});
+
+test("fractional marks round to a whole percentage without losing the mark itself", () => {
+  assert.equal(scoreLabel(7.5, 13), "7.5 / 13 (58%)");
 });

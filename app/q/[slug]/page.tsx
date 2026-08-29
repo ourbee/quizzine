@@ -25,6 +25,7 @@ import Material from "@/components/Material";
 import Media from "@/components/Media";
 import ExamShell from "@/components/ExamShell";
 import WrittenAnswer from "@/components/WrittenAnswer";
+import { percentOf } from "@/lib/score";
 
 interface PublicOption { key: string; text: string }
 interface PublicQuestion {
@@ -496,7 +497,7 @@ export default function StudentQuizPage() {
 
   // ------- review -------
   if (phase === "review" && review) {
-    const pct = review.max ? Math.round((review.score / review.max) * 100) : 0;
+    const pct = percentOf(review.score, review.max);
     return (
       <div style={pageStyle} className="py-10 px-4 flex-1">
         <main className="max-w-2xl mx-auto">
@@ -534,11 +535,17 @@ export default function StudentQuizPage() {
               <>
                 <p className="mt-4 text-5xl font-bold" style={{ color: theme.accent }}>
                   {review.score}<span className="text-2xl font-semibold" style={{ color: theme.muted }}> / {review.max}</span>
+                  {pct !== null && (
+                    <span className="ml-2 text-2xl font-semibold" style={{ color: theme.muted }}>({pct}%)</span>
+                  )}
                 </p>
-                <p className="mt-1 text-sm" style={{ color: theme.muted }}>
-                  {pct}%{review.pending > 0 && ` · ${review.pending} answer${review.pending === 1 ? "" : "s"} awaiting teacher review`}
-                  {review.flags.late && " · submitted late"}
-                </p>
+                {(review.pending > 0 || review.flags.late) && (
+                  <p className="mt-1 text-sm" style={{ color: theme.muted }}>
+                    {review.pending > 0 && `${review.pending} answer${review.pending === 1 ? "" : "s"} awaiting teacher review`}
+                    {review.pending > 0 && review.flags.late && " · "}
+                    {review.flags.late && "submitted late"}
+                  </p>
+                )}
                 {review.ability && (
                   <p className="mt-2 text-sm" style={{ color: theme.muted }}>
                     Ability estimate{" "}

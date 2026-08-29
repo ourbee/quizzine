@@ -11,6 +11,7 @@ import { getTheme } from "@/lib/themes";
 import { NO_SEMESTER, SEMESTER_CHOICES } from "@/lib/normalize";
 import { groupByPassage } from "@/lib/questions";
 import Material from "@/components/Material";
+import { percentOf, scoreLabel } from "@/lib/score";
 
 interface Band {
   id: string;
@@ -142,7 +143,7 @@ export default function RubricResultPage() {
     );
   }
 
-  const pct = data.max ? Math.round((data.score / data.max) * 100) : 0;
+  const pct = percentOf(data.score, data.max);
 
   return (
     <div style={pageStyle} className="flex-1 px-4 py-10">
@@ -153,9 +154,12 @@ export default function RubricResultPage() {
           <p className="mt-4 text-5xl font-bold" style={{ color: theme.accent }}>
             {data.score}
             <span className="text-2xl font-semibold" style={{ color: theme.muted }}> / {data.max}</span>
+            {pct !== null && (
+              <span className="ml-2 text-2xl font-semibold" style={{ color: theme.muted }}>({pct}%)</span>
+            )}
           </p>
           <p className="mt-1 text-sm" style={{ color: theme.muted }}>
-            {pct}% · marked against your teacher&apos;s rubric
+            Marked against your teacher&apos;s rubric
           </p>
           <button onClick={() => window.print()} className="no-print mt-4 rounded-lg px-5 py-2.5 font-semibold" style={accentBtn}>
             Print / save your copy
@@ -175,7 +179,7 @@ export default function RubricResultPage() {
                     </p>
                     {qn.graded && (
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
-                        {qn.marked ? `${qn.awarded} / ${qn.points}` : "Not marked"}
+                        {qn.marked ? scoreLabel(qn.awarded, qn.points) : "Not marked"}
                       </span>
                     )}
                   </div>

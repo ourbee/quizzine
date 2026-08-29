@@ -15,6 +15,7 @@ import { semesterLabel } from "@/lib/normalize";
 import PeerReviewPanel from "@/components/PeerReviewPanel";
 import SharePanel from "@/components/SharePanel";
 import type { AttemptFlags, GroupInfo, PerQuestionResult, Question, QuizSettings, StudentInfo } from "@/lib/types";
+import { scoreLabel } from "@/lib/score";
 
 interface QuizRow {
   id: string;
@@ -293,7 +294,7 @@ export default function QuizDetailPage() {
           ["Responses", String(attempts.length)],
           [
             survey ? "Not scored" : "Average score",
-            survey ? "—" : attempts.length ? `${Math.round(avg * 10) / 10} / ${attempts[0]?.max_score ?? ""}` : "—",
+            survey ? "—" : attempts.length ? scoreLabel(Math.round(avg * 10) / 10, attempts[0]?.max_score ?? 0) : "—",
           ],
           ["Flagged", String(attempts.filter((a) => a.flags?.late || duplicateIds.has(a.id)).length)],
         ].map(([label, value]) => (
@@ -345,7 +346,7 @@ export default function QuizDetailPage() {
                       <td className="px-4 py-2.5 font-semibold">
                         {survey
                           ? `${a.per_question?.filter((p) => p.answer).length ?? 0} / ${quiz.questions.length}`
-                          : `${a.score ?? 0} / ${a.max_score ?? 0}`}
+                          : scoreLabel(a.score, a.max_score)}
                       </td>
                       <td className="px-4 py-2.5 text-slate-500">{new Date(a.submitted_at).toLocaleString()}</td>
                       <td className="px-4 py-2.5 space-x-1">

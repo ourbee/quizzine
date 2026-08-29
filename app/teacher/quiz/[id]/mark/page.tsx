@@ -9,7 +9,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { awardedFor, scorePercent, type RubricConfig } from "@/lib/rubric";
-import { buildPackage, parseAiReply, remainderPackage, type MarkingPackage } from "@/lib/markpack";
+import { scoreLabel } from "@/lib/score";
+import { buildPackage, parseAiReply, remainderPackage, type PackInput, type PackScope } from "@/lib/markpack";
 import { largestJump, telemetryBadges, type QuestionTelemetry } from "@/lib/telemetry";
 import { countWords } from "@/lib/words";
 import type { MarkingRecord } from "@/lib/marking";
@@ -24,6 +25,11 @@ import Material from "@/components/Material";
  * relative grading; going attempt by attempt means re-reading the rubric from
  * scratch forty times and drifting a little each time. The per-student view is
  * there for the moment a teacher wants to see one person whole.
+ *
+ * The marking package follows the same three scopes: one question, one student,
+ * or the whole quiz. The default stays "one question" because it marks best,
+ * but a teacher who would rather make one round trip than twelve can, and the
+ * package splits itself by word budget either way.
  *
  * Where an AI pass has run, its scores pre-fill the controls and say so. They
  * are suggestions in the plainest sense: editable, discardable, and never
@@ -141,6 +147,7 @@ export default function MarkPage() {
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState("");
   const [showAi, setShowAi] = useState(false);
+  const [pkgScope, setPkgScope] = useState<PackScope>("question");
   const [partIndex, setPartIndex] = useState(0);
   const [reply, setReply] = useState("");
   const [pasteReport, setPasteReport] = useState<string[]>([]);
@@ -180,34 +187,48 @@ export default function MarkPage() {
   const question = data?.questions[qIndex];
   const attempt = data?.attempts[sIndex];
 
-  /** The package for the question on screen, rebuilt whenever it changes. */
-  const pack: MarkingPackage | null = useMemo(() => {
-    if (!data || !question) return null;
-    const asQuestion = {
-      id: question.id,
-      type: question.type,
-      text: question.text,
-      passage: question.passage,
-      passageTitle: question.passageTitle,
-      options: [],
-      points: question.points,
-      feedbackCorrect: question.modelAnswer,
-      wordLimit: question.wordLimit,
-    } as Question;
-    return buildPackage(
-      asQuestion,
-      data.rubric,
-      question.weights,
-      data.attempts.map((a) => ({ attemptId: a.id, text: a.answers[question.id] ?? "" }))
-    );
-  }, [data, question]);
+  /**
+   * What the package on screen covers. One question across the class, one
+   * student across the questions, or the whole quiz — the same builder either
+   * way, so a remainder is a filter of the same cells rather than a rebuild.
+   */
+  const packInput: PackInput | null = useMemo(() => {
+    if (!data) return null;
+    const asQuestion = (qn: MarkQuestion) =>
+      ({
+        id: qn.id,
+        type: qn.type,
+        text: qn.text,
+        passage: qn.passage,
+        passageTitle: qn.passageTitle,
+        options: [],
+        points: qn.points,
+        feedbackCorrect: qn.modelAnswer,
+        wordLimit: qn.wordLimit,
+      }) as Question;
+
+    const questions = pkgScope === "question" ? (question ? [question] : []) : data.questions;
+    const attempts = pkgScope === "student" ? (attempt ? [attempt] : []) : data.attempts;
+    if (!questions.length || !attempts.length) return null;
+
+    const answers = new Map(data.attempts.map((a) => [a.id, a.answers]));
+    return {
+      scope: pkgScope,
+      rubric: data.rubric,
+      questions: questions.map((qn) => ({ question: asQuestion(qn), weights: qn.weights })),
+      attempts: attempts.map((a) => ({ attemptId: a.id })),
+      answer: (attemptId: string, qid: string) => answers.get(attemptId)?.[qid] ?? "",
+    };
+  }, [data, question, attempt, pkgScope]);
+
+  const pack = useMemo(() => (packInput ? buildPackage(packInput) : null), [packInput]);
 
   useEffect(() => {
     setPartIndex(0);
     setReply("");
     setPasteReport([]);
     setUnmarkedCodes([]);
-  }, [qIndex]);
+  }, [qIndex, sIndex, pkgScope]);
 
   function patch(attemptId: string, qid: string, change: Partial<Draft>) {
     const k = key(attemptId, qid);
@@ -296,23 +317,33 @@ export default function MarkPage() {
 
   /** Read a pasted reply, report coverage, and store what it holds as AI marks. */
   async function applyReply() {
-    if (!pack || !question || !data) return;
+    if (!pack || !data) return;
     const expected = pack.parts[partIndex]?.codes ?? [];
-    const result = parseAiReply(reply, expected, question.weights);
+    // Weights come from the package rather than from one question, because a
+    // student or batch package spans questions that may cap a parameter
+    // differently.
+    const result = parseAiReply(reply, expected, pack.codeWeights);
     if (result.error) {
       setPasteReport([result.error]);
       setUnmarkedCodes(expected);
       return;
     }
-    const marks = result.marks.map((m) => ({
-      attemptId: pack.codeMap[m.code],
-      qid: question.id,
-      params: m.params,
-      strengths: m.strengths ?? "",
-      improvements: m.improvements ?? "",
-      corrections: m.corrections ?? "",
-      oneThing: m.oneThing ?? "",
-    }));
+    // The code says which answer, and in a multi-question package that means
+    // which student AND which question. A code the package never issued has
+    // already been rejected upstream, so nothing here has to guess.
+    const marks = result.marks.flatMap((m) => {
+      const ref = pack.codeMap[m.code];
+      if (!ref) return [];
+      return [{
+        attemptId: ref.attemptId,
+        qid: ref.qid,
+        params: m.params,
+        strengths: m.strengths ?? "",
+        improvements: m.improvements ?? "",
+        corrections: m.corrections ?? "",
+        oneThing: m.oneThing ?? "",
+      }];
+    });
 
     const report: string[] = [];
     if (marks.length) {
@@ -344,28 +375,10 @@ export default function MarkPage() {
     await load();
   }
 
-  const remainder = useMemo(() => {
-    if (!pack || !question || !data || !unmarkedCodes.length) return null;
-    const asQuestion = {
-      id: question.id,
-      type: question.type,
-      text: question.text,
-      passage: question.passage,
-      passageTitle: question.passageTitle,
-      options: [],
-      points: question.points,
-      feedbackCorrect: question.modelAnswer,
-      wordLimit: question.wordLimit,
-    } as Question;
-    return remainderPackage(
-      asQuestion,
-      data.rubric,
-      question.weights,
-      data.attempts.map((a) => ({ attemptId: a.id, text: a.answers[question.id] ?? "" })),
-      pack.codeMap,
-      unmarkedCodes
-    );
-  }, [pack, question, data, unmarkedCodes]);
+  const remainder = useMemo(
+    () => (packInput && unmarkedCodes.length ? remainderPackage(packInput, unmarkedCodes) : null),
+    [packInput, unmarkedCodes]
+  );
 
   if (error && !data) return <main className="mx-auto max-w-4xl px-6 py-16 text-red-600">{error}</main>;
   if (!data) return <main className="mx-auto max-w-4xl px-6 py-16 text-slate-500">Loading…</main>;
@@ -483,7 +496,7 @@ export default function MarkPage() {
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2">
           <span className="text-sm font-semibold text-slate-700">
-            {percent}% · {awarded} / {qn.points} marks
+            {awarded} / {qn.points} marks ({percent}%)
           </span>
           <div className="flex items-center gap-2">
             {draft.dirty && <span className="text-xs font-medium text-amber-700">unsaved</span>}
@@ -521,6 +534,185 @@ export default function MarkPage() {
     );
   };
 
+  // ---------- the marking package, at whichever scope the teacher wants ----------
+
+  /*
+   * One package, three scopes. Question scope marks best and stays the default;
+   * student and batch scope exist because a teacher with twelve questions was
+   * otherwise made to do twelve copy-paste round trips to mark one class, and
+   * that cost is real even where the marking is a little better for it. The
+   * trade-off is stated on screen rather than decided for them.
+   */
+  const scopeChoices: { id: PackScope; label: string; note: string; disabled: boolean }[] = [
+    { id: "question", label: "This question", note: "Every response to the question on screen. Marks most consistently — the model holds one question in mind and grades the class against each other.", disabled: !question },
+    { id: "student", label: "This student", note: "One student's answers to every written question, in one package. What you want when you are working through a pile person by person, or re-marking one paper.", disabled: !attempt },
+    { id: "batch", label: "Whole quiz", note: "Every answer to every question, in the fewest round trips. Ordered question by question so a part still holds one question's answers together, but the model's attention is spread thinnest here — read what comes back.", disabled: !data.questions.length || !data.attempts.length },
+  ];
+  const activeScope = scopeChoices.find((c) => c.id === pkgScope);
+  const covered = pack ? Object.keys(pack.codeMap).length : 0;
+  const scopeTarget =
+    pkgScope === "question"
+      ? question
+        ? `Q${qIndex + 1} · ${data.attempts.length} response${data.attempts.length === 1 ? "" : "s"}`
+        : "—"
+      : pkgScope === "student"
+        ? attempt
+          ? `${attempt.name} · ${attempt.roll} · ${data.questions.length} question${data.questions.length === 1 ? "" : "s"}`
+          : "—"
+        : `${data.questions.length} question${data.questions.length === 1 ? "" : "s"} × ${data.attempts.length} response${data.attempts.length === 1 ? "" : "s"}`;
+
+  const aiPanel = (
+    <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50/50 p-4">
+      <button onClick={() => setShowAi((v) => !v)} className="text-sm font-bold text-violet-900">
+        {showAi ? "▾" : "▸"} Mark with a chatbot (optional)
+      </button>
+      {showAi && (
+        <div className="mt-3 space-y-3 text-sm">
+          <p className="text-xs text-violet-900">
+            Copy the package below into whichever chatbot you use, then paste its reply back here. No key, no account,
+            nothing sent from Quizzine. Names never enter the package — answers travel under codes, and only Quizzine
+            knows which is whose.
+          </p>
+
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-violet-900">Package</p>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {scopeChoices.map((choice) => (
+                <button
+                  key={choice.id}
+                  onClick={() => setPkgScope(choice.id)}
+                  disabled={choice.disabled}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-40 ${
+                    choice.id === pkgScope
+                      ? "bg-violet-700 text-white"
+                      : "border border-violet-300 bg-white text-violet-800 hover:bg-violet-100"
+                  }`}
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-xs text-slate-600">{activeScope?.note}</p>
+          </div>
+
+          {!pack || !covered ? (
+            <p className="rounded-lg bg-white p-3 text-xs text-slate-600">
+              Nothing to send — there are no typed answers in this package yet.
+            </p>
+          ) : (
+            <>
+              <p className="rounded-lg bg-white p-2 text-xs text-slate-600">
+                <strong>{scopeTarget}</strong> — {covered} answer{covered === 1 ? "" : "s"},{" "}
+                {pack.totalWords.toLocaleString()} words
+                {pack.parts.length > 1 ? `, split into ${pack.parts.length} parts.` : "."}
+                {pack.parts.length > 1 && (
+                  <>
+                    {" "}
+                    Use a <strong>fresh chat for each part</strong> — a long conversation marks the later answers worse
+                    than the earlier ones. Parts marked in separate chats can drift a little against each other; your
+                    review pass is the correction for that.
+                  </>
+                )}
+                {pkgScope !== "question" && (
+                  <>
+                    {" "}
+                    Codes here are like <strong>R3Q2</strong> — response 3, question 2 — so a reply that drops the
+                    question half is refused rather than guessed at.
+                  </>
+                )}
+              </p>
+              {pack.blank > 0 && (
+                <p className="text-xs text-slate-500">
+                  {pack.blank} blank answer{pack.blank === 1 ? " is" : "s are"} left out — they are marked “no response”
+                  at 0 and never hold up release.
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {pack.parts.map((part, i) => (
+                  <button
+                    key={part.index}
+                    onClick={() => {
+                      setPartIndex(i);
+                      copyPart(part.text, `part-${part.index}`);
+                    }}
+                    className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                      i === partIndex ? "bg-violet-700 text-white" : "border border-violet-300 bg-white text-violet-800"
+                    }`}
+                  >
+                    {copied === `part-${part.index}`
+                      ? "Copied ✓"
+                      : pack.parts.length > 1
+                        ? `Copy part ${part.index} of ${part.total} (${part.codes.length} answers)`
+                        : `Copy the package (${part.codes.length} answers)`}
+                  </button>
+                ))}
+              </div>
+
+              <label className="block text-xs font-semibold text-violet-900">
+                Paste the reply for part {partIndex + 1}
+                <textarea
+                  value={reply}
+                  onChange={(e) => setReply(e.target.value)}
+                  rows={5}
+                  placeholder="Paste the whole reply — extra prose around the JSON is fine."
+                  className="mt-1 w-full rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm font-normal text-slate-900"
+                />
+              </label>
+              <button
+                onClick={applyReply}
+                disabled={!!busy || !reply.trim()}
+                className="rounded-lg bg-violet-700 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-800 disabled:opacity-40"
+              >
+                {busy === "paste" ? "Reading…" : "Read the reply"}
+              </button>
+
+              {pasteReport.length > 0 && (
+                <ul className="space-y-1 rounded-lg bg-white p-3 text-xs text-slate-700">
+                  {pasteReport.map((line, i) => (
+                    <li key={i}>• {line}</li>
+                  ))}
+                </ul>
+              )}
+              {remainder?.parts.map((part) => (
+                <button
+                  key={part.index}
+                  onClick={() => copyPart(part.text, `rem-${part.index}`)}
+                  className="rounded-lg border border-violet-300 bg-white px-3 py-2 text-xs font-semibold text-violet-800"
+                >
+                  {copied === `rem-${part.index}`
+                    ? "Copied ✓"
+                    : `Copy the remainder package${
+                        remainder.parts.length > 1 ? ` (part ${part.index} of ${part.total})` : ""
+                      } — ${part.codes.length} unmarked`}
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  /*
+   * What this student has on the written half so far. Unmarked answers count as
+   * nothing, which is what release would do with them, so the count of what is
+   * still unmarked is shown beside the total rather than left to be inferred.
+   */
+  const writtenTotal = (() => {
+    if (!attempt) return null;
+    let awarded = 0;
+    let points = 0;
+    let unmarked = 0;
+    for (const qn of data.questions) {
+      const draft = drafts[key(attempt.id, qn.id)] ?? blankDraft();
+      const scored = Object.values(draft.params).some((v) => Number.isFinite(v));
+      if (!scored) unmarked += 1;
+      awarded += awardedFor(scorePercent(draft.params, qn.weights), qn.points);
+      points += qn.points;
+    }
+    return { awarded: Math.round(awarded * 100) / 100, points, unmarked };
+  })();
+
   const phase = data.quiz.phase;
   const released = phase === "closed";
 
@@ -539,7 +731,14 @@ export default function MarkPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => setView(view === "question" ? "student" : "question")}
+            onClick={() => {
+              const next = view === "question" ? "student" : "question";
+              setView(next);
+              // The package follows the view, because a teacher who has just
+              // switched to one student almost never wants a question package.
+              // "Whole quiz" is a deliberate choice and survives the switch.
+              if (pkgScope !== "batch") setPkgScope(next);
+            }}
             className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200"
           >
             {view === "question" ? "Per student" : "Question by question"}
@@ -616,95 +815,7 @@ export default function MarkPage() {
                 )}
               </div>
 
-              {/* ---------- the AI pass ---------- */}
-              <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50/50 p-4">
-                <button
-                  onClick={() => setShowAi((v) => !v)}
-                  className="text-sm font-bold text-violet-900"
-                >
-                  {showAi ? "▾" : "▸"} Mark this question with a chatbot (optional)
-                </button>
-                {showAi && pack && (
-                  <div className="mt-3 space-y-3 text-sm">
-                    <p className="text-xs text-violet-900">
-                      Copy the package below into whichever chatbot you use, then paste its reply back here. No key, no
-                      account, nothing sent from Quizzine. Names never enter the package — responses travel as R1, R2, …
-                      and only Quizzine knows which is whose.
-                    </p>
-                    {pack.parts.length > 1 && (
-                      <p className="rounded-lg bg-white p-2 text-xs text-slate-600">
-                        {pack.totalWords.toLocaleString()} words of responses, so this question is split into{" "}
-                        {pack.parts.length} parts. Use a <strong>fresh chat for each part</strong> — a long conversation
-                        marks the later responses worse than the earlier ones. Parts marked in separate chats can drift a
-                        little against each other; your review pass is the correction for that.
-                      </p>
-                    )}
-                    {pack.blank > 0 && (
-                      <p className="text-xs text-slate-500">
-                        {pack.blank} blank response{pack.blank === 1 ? " is" : "s are"} left out — they are marked “no
-                        response” at 0 and never hold up release.
-                      </p>
-                    )}
-                    <div className="flex flex-wrap gap-2">
-                      {pack.parts.map((part, i) => (
-                        <button
-                          key={part.index}
-                          onClick={() => {
-                            setPartIndex(i);
-                            copyPart(part.text, `part-${part.index}`);
-                          }}
-                          className={`rounded-lg px-3 py-2 text-xs font-semibold ${
-                            i === partIndex ? "bg-violet-700 text-white" : "bg-white text-violet-800 border border-violet-300"
-                          }`}
-                        >
-                          {copied === `part-${part.index}`
-                            ? "Copied ✓"
-                            : pack.parts.length > 1
-                              ? `Copy part ${part.index} of ${part.total} (${part.codes.length} responses)`
-                              : `Copy the package (${part.codes.length} responses)`}
-                        </button>
-                      ))}
-                    </div>
-
-                    <label className="block text-xs font-semibold text-violet-900">
-                      Paste the reply for part {partIndex + 1}
-                      <textarea
-                        value={reply}
-                        onChange={(e) => setReply(e.target.value)}
-                        rows={5}
-                        placeholder="Paste the whole reply — extra prose around the JSON is fine."
-                        className="mt-1 w-full rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm font-normal text-slate-900"
-                      />
-                    </label>
-                    <button
-                      onClick={applyReply}
-                      disabled={!!busy || !reply.trim()}
-                      className="rounded-lg bg-violet-700 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-800 disabled:opacity-40"
-                    >
-                      {busy === "paste" ? "Reading…" : "Read the reply"}
-                    </button>
-
-                    {pasteReport.length > 0 && (
-                      <ul className="space-y-1 rounded-lg bg-white p-3 text-xs text-slate-700">
-                        {pasteReport.map((line, i) => (
-                          <li key={i}>• {line}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {remainder?.parts.map((part) => (
-                      <button
-                        key={part.index}
-                        onClick={() => copyPart(part.text, `rem-${part.index}`)}
-                        className="rounded-lg border border-violet-300 bg-white px-3 py-2 text-xs font-semibold text-violet-800"
-                      >
-                        {copied === `rem-${part.index}`
-                          ? "Copied ✓"
-                          : `Copy the remainder package${remainder.parts.length > 1 ? ` (part ${part.index} of ${part.total})` : ""} — ${part.codes.length} unmarked`}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              {aiPanel}
 
               <div className="mt-4 flex items-center justify-between">
                 <h2 className="font-bold text-slate-900">
@@ -747,6 +858,20 @@ export default function MarkPage() {
               </button>
             ))}
           </div>
+          {attempt && writtenTotal && (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <p className="font-semibold text-slate-900">{attempt.name} · {attempt.roll}</p>
+              <p className="text-sm font-semibold text-slate-700">
+                Written answers: {scoreLabel(writtenTotal.awarded, writtenTotal.points)}
+                {writtenTotal.unmarked > 0 && (
+                  <span className="ml-2 text-xs font-medium text-amber-700">
+                    {writtenTotal.unmarked} still unmarked
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
+          {aiPanel}
           {attempt && (
             <div className="mt-4 space-y-3">
               {data.questions.map((qn, i) => (
