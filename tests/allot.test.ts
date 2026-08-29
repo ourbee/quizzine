@@ -155,3 +155,96 @@ test("allotmentProblems blocks an empty roster and undealt rolls", () => {
   const ok: Allotment = { ...a, entries: [{ roll: "1", qids: ["q1"] }] };
   assert.deepEqual(allotmentProblems(ok, [q("q1")]), []);
 });
+
+// ---------------------------------------------------------------------------
+// Marking an allotted test. The package builder is fed the union of every
+// dealt question and answers only where a student actually sat one, which is
+// how the copy-package / paste-back round trip survives one question per
+// student. See SPEC-allotted-tests.md §7.
+// ---------------------------------------------------------------------------
+
+test("a batch package over an allotted test holds one cell per student, and the codes round-trip", async () => {
+  const { buildPackage, parseAiReply } = await import("../lib/markpack.ts");
+  const { DEFAULT_RUBRIC, effectiveWeights } = await import("../lib/rubric.ts");
+  const weights = effectiveWeights(DEFAULT_RUBRIC);
+
+  const bank: Question[] = ["q1", "q2", "q3"].map((id, i) => ({
+    id,
+    type: "essay",
+    text: `Grammar question ${i + 1}`,
+    options: [],
+    points: 10,
+  }));
+  // Four students, one question each, dealt as the dealer would deal them.
+  const dealt = dealAllotment(
+    bank.map((b) => b.id),
+    ["11", "12", "13", "14"],
+    1,
+    "seed"
+  );
+  const hands = new Map(dealt.map((e, i) => [`a${i + 1}`, e.qids]));
+
+  const pack = buildPackage({
+    scope: "batch",
+    rubric: DEFAULT_RUBRIC,
+    questions: bank.map((question) => ({ question, weights })),
+    attempts: [...hands.keys()].map((attemptId) => ({ attemptId })),
+    // The one rule that makes this work: a student answers only their own hand.
+    answer: (attemptId, qid) =>
+      hands.get(attemptId)?.includes(qid) ? `Answer by ${attemptId} to ${qid}` : "",
+  });
+
+  const codes = Object.keys(pack.codeMap);
+  assert.equal(codes.length, 4, "one cell per student, not one per student per question");
+  for (const [code, ref] of Object.entries(pack.codeMap)) {
+    assert.ok(hands.get(ref.attemptId)?.includes(ref.qid), `${code} points at a question its student was dealt`);
+  }
+  // Every student is represented exactly once.
+  assert.deepEqual(
+    [...new Set(Object.values(pack.codeMap).map((r) => r.attemptId))].sort(),
+    ["a1", "a2", "a3", "a4"]
+  );
+
+  // A reply keyed by those codes resolves back to the right (student, question).
+  const reply = JSON.stringify(
+    codes.map((code) => ({
+      code,
+      scores: Object.fromEntries(Object.keys(weights).map((p) => [p, 5])),
+      strengths: "s",
+      improvements: "i",
+      corrections: "c",
+      oneThing: "o",
+    }))
+  );
+  const parsed = parseAiReply(reply, codes, pack.codeWeights);
+  assert.equal(parsed.marks.length, 4);
+  assert.deepEqual(parsed.rejected, []);
+  assert.deepEqual(parsed.unmarked, []);
+  // Each mark resolves to the student whose answer it judged.
+  for (const mark of parsed.marks) {
+    const ref = pack.codeMap[mark.code];
+    assert.ok(hands.get(ref.attemptId)?.includes(ref.qid));
+  }
+});
+
+test("an allotted student's package covers their own question only", async () => {
+  const { buildPackage } = await import("../lib/markpack.ts");
+  const { DEFAULT_RUBRIC, effectiveWeights } = await import("../lib/rubric.ts");
+  const weights = effectiveWeights(DEFAULT_RUBRIC);
+  const bank: Question[] = ["q1", "q2", "q3"].map((id) => ({
+    id,
+    type: "essay",
+    text: `Question ${id}`,
+    options: [],
+    points: 10,
+  }));
+  const pack = buildPackage({
+    scope: "student",
+    rubric: DEFAULT_RUBRIC,
+    questions: bank.map((question) => ({ question, weights })),
+    attempts: [{ attemptId: "a1" }],
+    answer: (_a, qid) => (qid === "q2" ? "Their one answer." : ""),
+  });
+  assert.deepEqual(Object.values(pack.codeMap).map((r) => r.qid), ["q2"]);
+  assert.equal(pack.blank, 2, "the two questions they never sat are counted as blank, not marked");
+});

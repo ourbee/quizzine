@@ -63,6 +63,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       title: quiz.title,
       phase: quiz.phase ?? "responding",
       gradingMode: quiz.settings.gradingMode ?? "graded",
+      allotMode: !!quiz.settings.allotMode,
     },
     rubric,
     questions: written.map((qn) => ({
@@ -87,6 +88,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       score: a.score,
       maxScore: a.max_score,
       submittedAt: a.submitted_at,
+      // Allotted tests: which questions this student was actually dealt, so the
+      // screen can show them their own paper rather than the whole bank.
+      allotted: a.allotted ?? null,
     })),
     progress: markingProgress(quiz.questions, attempts),
   });

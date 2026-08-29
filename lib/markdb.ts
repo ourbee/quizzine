@@ -36,12 +36,14 @@ export interface MarkAttemptRow {
   max_score: number | null;
   teacher_score: number | null;
   submitted_at: string;
+  /** Allotted tests: the questions this student was dealt. Null for every other quiz. */
+  allotted: string[] | null;
 }
 
 export const listMarkableAttempts = (quizId: string) =>
   q<MarkAttemptRow>(
     `SELECT id, student, group_info, answers, per_question, marking, telemetry, flags,
-            score, max_score, teacher_score, submitted_at
+            score, max_score, teacher_score, submitted_at, allotted
        FROM attempts WHERE quiz_id = $1 AND status = 'submitted' ORDER BY submitted_at ASC`,
     [quizId]
   );

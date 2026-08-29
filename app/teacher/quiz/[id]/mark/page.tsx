@@ -59,10 +59,12 @@ interface MarkAttempt {
   score: number | null;
   maxScore: number | null;
   submittedAt: string;
+  /** Allotted tests: the questions this student was dealt. Null everywhere else. */
+  allotted: string[] | null;
 }
 
 interface MarkData {
-  quiz: { id: string; slug: string; title: string; phase: string; gradingMode: string };
+  quiz: { id: string; slug: string; title: string; phase: string; gradingMode: string; allotMode?: boolean };
   rubric: RubricConfig;
   questions: MarkQuestion[];
   attempts: MarkAttempt[];
@@ -207,6 +209,40 @@ export default function MarkPage() {
 
   const question = data?.questions[qIndex];
   const attempt = data?.attempts[sIndex];
+
+  /*
+   * An allotted test is a different shape of pile: every student sat their own
+   * question, so a question tab holds one or two students and a student's page
+   * holds one question. Both views therefore show only the cells that exist —
+   * the whole bank against every name would be a grid of blanks — and the
+   * per-student view leads, because that is the pile as it actually is.
+   */
+  const allotMode = !!data?.quiz.allotMode;
+  /** The written questions this student was dealt; all of them when not allotted. */
+  const questionsFor = useCallback(
+    (a: MarkAttempt | undefined): MarkQuestion[] => {
+      if (!data) return [];
+      if (!allotMode || !a?.allotted?.length) return data.questions;
+      return data.questions.filter((qn) => a.allotted!.includes(qn.id));
+    },
+    [data, allotMode]
+  );
+  /** The students dealt this question; everyone when not allotted. */
+  const attemptsFor = useCallback(
+    (qn: MarkQuestion | undefined): MarkAttempt[] => {
+      if (!data) return [];
+      if (!allotMode || !qn) return data.attempts;
+      return data.attempts.filter((a) => !a.allotted?.length || a.allotted.includes(qn.id));
+    },
+    [data, allotMode]
+  );
+
+  // Land on the per-student view for an allotted test, once, before the teacher
+  // has expressed a preference by clicking either tab.
+  const [viewChosen, setViewChosen] = useState(false);
+  useEffect(() => {
+    if (allotMode && !viewChosen) setView("student");
+  }, [allotMode, viewChosen]);
 
   /**
    * What the package on screen covers. One question across the class, one
@@ -649,8 +685,10 @@ export default function MarkPage() {
    * label does that any more: each says how many students and how many
    * questions it covers, and the counts sit underneath.
    */
-  const nStudents = data.attempts.length;
-  const nQuestions = data.questions.length;
+  // In an allotted test the axes are not the whole grid: a question covers only
+  // the students dealt it, and a student covers only their own hand.
+  const nStudents = allotMode && question ? attemptsFor(question).length : data.attempts.length;
+  const nQuestions = allotMode && attempt ? questionsFor(attempt).length : data.questions.length;
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
   const unitChoice: { id: PackScope; label: string; covers: string; note: string } =
@@ -672,7 +710,9 @@ export default function MarkPage() {
     {
       id: "batch",
       label: "Everything",
-      covers: `${plural(nStudents, "student")} × ${plural(nQuestions, "question")}`,
+      covers: allotMode
+        ? `${plural(data.attempts.length, "student")}, each with their own question`
+        : `${plural(nStudents, "student")} × ${plural(nQuestions, "question")}`,
       note: "Every answer by every student, in the fewest round trips. Grouped question by question, but the model's attention is spread thinnest here — read what comes back.",
       count: countFor("batch"),
     },
@@ -830,7 +870,10 @@ export default function MarkPage() {
     let awarded = 0;
     let points = 0;
     let unmarked = 0;
-    for (const qn of data.questions) {
+    // This student's paper, which in an allotted test is their own hand — a
+    // total out of the whole bank would be a mark out of questions they never
+    // sat.
+    for (const qn of questionsFor(attempt)) {
       const draft = drafts[key(attempt.id, qn.id)] ?? blankDraft();
       const scored = Object.values(draft.params).some((v) => Number.isFinite(v));
       if (!scored) unmarked += 1;
@@ -906,6 +949,7 @@ export default function MarkPage() {
                 key={id}
                 onClick={() => {
                   setView(id);
+                  setViewChosen(true);
                   // The package follows the view: a teacher who has just moved
                   // to one student almost never wants a question package. Whole
                   // quiz is a deliberate choice and survives the switch.
@@ -1024,7 +1068,8 @@ export default function MarkPage() {
 
               <div className="mt-4 flex items-center justify-between">
                 <h2 className="font-bold text-slate-900">
-                  {data.attempts.length} response{data.attempts.length === 1 ? "" : "s"}
+                  {attemptsFor(question).length} response{attemptsFor(question).length === 1 ? "" : "s"}
+                  {allotMode && <span className="ml-2 text-sm font-medium text-slate-500">dealt this question</span>}
                 </h2>
                 <button
                   onClick={saveAllOnQuestion}
@@ -1036,12 +1081,12 @@ export default function MarkPage() {
               </div>
 
               <div className="mt-3 space-y-3">
-                {data.attempts.map((a, i) =>
+                {attemptsFor(question).map((a, i) =>
                   responseCard(a, question, `${i + 1}. ${a.name} · ${a.roll}`)
                 )}
-                {!data.attempts.length && (
+                {!attemptsFor(question).length && (
                   <p className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
-                    No responses yet.
+                    {allotMode ? "Nobody dealt this question has submitted yet." : "No responses yet."}
                   </p>
                 )}
               </div>
@@ -1054,7 +1099,7 @@ export default function MarkPage() {
             {data.attempts.map((a, i) => {
               // A tick beside a name means every written answer of theirs is
               // marked — the register's own way of showing who is done.
-              const done = data.questions.every((qn) => !!a.marking?.[qn.id]?.teacher || !(a.answers[qn.id] ?? "").trim());
+              const done = questionsFor(a).every((qn) => !!a.marking?.[qn.id]?.teacher || !(a.answers[qn.id] ?? "").trim());
               return (
                 <button
                   key={a.id}
@@ -1088,12 +1133,23 @@ export default function MarkPage() {
           {aiPanel}
           {attempt && (
             <div className="mt-4 space-y-3">
-              {data.questions.map((qn, i) => (
+              {questionsFor(attempt).map((qn) => (
                 <div key={qn.id}>
                   <div className="rounded-t-xl border border-b-0 border-slate-200 bg-slate-50 px-4 py-2.5">
                     <p className="text-sm font-medium text-slate-900">
-                      <span className="font-semibold text-slate-400">Q{i + 1}.</span> {qn.text}
+                      <span className="font-semibold text-slate-400">
+                        Q{data.questions.findIndex((x) => x.id === qn.id) + 1}.
+                      </span>{" "}
+                      {qn.text}
                     </p>
+                    {/* The one thing a marker must know here: this student's
+                        paper is not the next student's. */}
+                    {allotMode && (
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        Dealt to {attempt.name} · {qn.points} mark{qn.points === 1 ? "" : "s"}
+                        {qn.wordLimit ? ` · ${qn.wordLimit}-word limit` : ""}
+                      </p>
+                    )}
                   </div>
                   {responseCard(attempt, qn, `${attempt.name} · ${attempt.roll}`)}
                 </div>
