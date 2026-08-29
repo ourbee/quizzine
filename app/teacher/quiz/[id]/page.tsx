@@ -11,6 +11,7 @@ import Link from "next/link";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import { correctKeysOf, isChoice, isGraded, isSurvey, splitKeys } from "@/lib/questions";
+import { normalizeAllotment } from "@/lib/allot";
 import { semesterLabel } from "@/lib/normalize";
 import PeerReviewPanel from "@/components/PeerReviewPanel";
 import SharePanel from "@/components/SharePanel";
@@ -30,6 +31,8 @@ interface QuizRow {
   phase?: string | null;
   /** Set when this quiz arrived as a colleague's copy — see the share route. */
   shared_by?: string | null;
+  /** Allotted tests: the roster and the roll → question deal. */
+  allotment?: unknown;
 }
 
 interface AttemptRow {
@@ -42,6 +45,8 @@ interface AttemptRow {
   max_score: number | null;
   flags: AttemptFlags;
   submitted_at: string;
+  /** Allotted tests: the qids this student was dealt. */
+  allotted?: string[] | null;
 }
 
 export default function QuizDetailPage() {
@@ -121,6 +126,18 @@ export default function QuizDetailPage() {
     });
   }, [quiz, attempts]);
 
+  // The roster is what lets an allotted quiz say who has NOT submitted yet —
+  // something no other mode can know.
+  const allotted = !!quiz?.settings.allotMode;
+  const allotmentInfo = useMemo(() => {
+    if (!quiz || !allotted) return null;
+    const a = normalizeAllotment(quiz.allotment);
+    if (!a) return null;
+    const submitted = new Set(attempts.map((at) => at.student.rollNorm));
+    const missing = a.entries.filter((e) => !submitted.has(e.roll)).map((e) => e.roll);
+    return { semester: a.semester, rosterSize: a.entries.length, missing };
+  }, [quiz, attempts, allotted]);
+
   // A quiz with nothing to score has no meaningful average. A peer-reviewed or
   // rubric-marked one has no marks either until they are in and released.
   const peerMode = quiz?.settings.gradingMode === "peer";
@@ -140,11 +157,17 @@ export default function QuizDetailPage() {
 
   async function toggleAccepting() {
     if (!quiz) return;
-    await fetch(`/api/quizzes/${quiz.id}`, {
+    const res = await fetch(`/api/quizzes/${quiz.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ accepting: !quiz.accepting }),
     });
+    if (!res.ok) {
+      // The one refusal this can meet: opening an allotted quiz whose roster
+      // still has a roll with no question.
+      const data = await res.json().catch(() => ({}));
+      alert(data.error ?? "Could not change whether the quiz is open.");
+    }
     load();
   }
 
@@ -221,8 +244,22 @@ export default function QuizDetailPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">{quiz.title}</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            {quiz.questions.length} questions · created {new Date(quiz.created_at).toLocaleDateString()}
+            {allotted && (
+              <span className="mr-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800">
+                Allotted{allotmentInfo ? ` · ${semesterLabel(allotmentInfo.semester)} · ${allotmentInfo.rosterSize} on roster` : ""}
+              </span>
+            )}
+            {quiz.questions.length} questions{allotted ? " in the bank" : ""} · created {new Date(quiz.created_at).toLocaleDateString()}
           </p>
+          {allotted && !allotmentInfo && (
+            <p className="mt-1 text-sm font-medium text-amber-700">
+              No roster attached yet — students cannot start until you{" "}
+              <Link href={`/teacher/quiz/${quiz.id}/edit#allotment`} className="underline underline-offset-2">
+                attach one and deal the questions
+              </Link>
+              .
+            </p>
+          )}
           {quiz.shared_by && (
             // Said on the copy itself, because "why does my colleague's edit not
             // show up here?" is only a puzzle if nobody said it was a copy.
@@ -305,6 +342,27 @@ export default function QuizDetailPage() {
         ))}
       </div>
 
+      {allotmentInfo && (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-sm text-slate-700">
+            <span className="font-semibold text-slate-900">
+              {attempts.length} of {allotmentInfo.rosterSize}
+            </span>{" "}
+            on the roster have submitted.
+          </p>
+          {allotmentInfo.missing.length > 0 ? (
+            <details className="mt-1">
+              <summary className="cursor-pointer text-sm font-semibold text-amber-700">
+                Not yet submitted — {allotmentInfo.missing.length} roll{allotmentInfo.missing.length === 1 ? "" : "s"}
+              </summary>
+              <p className="mt-1.5 font-mono text-sm text-slate-600">{allotmentInfo.missing.join(", ")}</p>
+            </details>
+          ) : (
+            attempts.length > 0 && <p className="mt-1 text-sm text-green-700">Everyone on the roster is in. 🎉</p>
+          )}
+        </div>
+      )}
+
       <section className="mt-8">
         <div className="flex items-center justify-between">
           <h2 className="font-bold text-slate-900">Responses</h2>
@@ -371,7 +429,12 @@ export default function QuizDetailPage() {
                   Members: {a.group_info.members.map((m) => `${m.name} (${m.roll})`).join(", ")}
                 </p>
               )}
-              {quiz.questions.map((qn, i) => {
+              {quiz.questions
+                // An allotted student only ever sat their own hand; listing the
+                // whole bank with dashes would bury the one answer that exists.
+                .filter((qn) => !a.allotted || a.allotted.includes(qn.id))
+                .map((qn) => {
+                const i = quiz.questions.indexOf(qn);
                 const per = a.per_question?.find((p) => p.qid === qn.id);
                 const scored = isGraded(qn);
                 return (

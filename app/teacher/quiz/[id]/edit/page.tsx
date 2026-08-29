@@ -8,6 +8,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import * as XLSX from "xlsx";
+import {
+  allotmentCoverage,
+  dealAllotment,
+  newSeed,
+  normalizeAllotment,
+  parseRoster,
+  type Allotment,
+} from "@/lib/allot";
+import { NO_SEMESTER, SEMESTER_CHOICES, semesterLabel } from "@/lib/normalize";
 import { DEFAULT_MST, mstCapacity, normalizeMstConfig, type MstConfig } from "@/lib/mst";
 import { DEFAULT_PEER_CONFIG, normalizePeerConfig, peerMaxScore, type PeerConfig } from "@/lib/peer";
 import { TAG_PRESETS, difficultyLabel } from "@/lib/tags";
@@ -21,10 +31,11 @@ import type { EditPlan } from "@/lib/edit";
 import type { GradingMode, MultiScoring, Question, QuizSettings, TimerMode } from "@/lib/types";
 import Logo from "@/components/Logo";
 
-/** The four anchors the jump bar offers, in the order they appear on screen. */
+/** The anchors the jump bar offers, in the order they appear on screen. */
 const SECTIONS: [string, string][] = [
   ["basics", "Basics"],
   ["settings", "Settings"],
+  ["allotment", "Allotment"],
   ["questions", "Questions"],
 ];
 
@@ -56,6 +67,14 @@ export default function EditQuizPage() {
   const [rows, setRows] = useState<EditableQuestion[]>([]);
   const [attemptCount, setAttemptCount] = useState(0);
 
+  // Allotted tests: the roster and the roll → question deal, edited here and
+  // saved with everything else. See lib/allot.ts and SPEC-allotted-tests.md.
+  const [allotment, setAllotment] = useState<Allotment | null>(null);
+  const [rosterText, setRosterText] = useState("");
+  const [rosterNote, setRosterNote] = useState("");
+  const [perStudent, setPerStudent] = useState("1");
+  const [allotSemester, setAllotSemester] = useState("1");
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -85,7 +104,18 @@ export default function EditQuizPage() {
       if (data.quiz.settings?.groupMax) setGroupMax(String(data.quiz.settings.groupMax));
       setRows((data.quiz.questions ?? []).map(toEditable));
       setAttemptCount((data.attempts ?? []).length);
+      const stored = normalizeAllotment(data.quiz.allotment);
+      if (stored) {
+        setAllotment(stored);
+        setRosterText(stored.entries.map((e) => e.roll).join("\n"));
+        setPerStudent(String(stored.perStudent));
+        setAllotSemester(String(stored.semester));
+      }
       setLoading(false);
+      // "Attach the roster →" lands here with #allotment in the URL.
+      if (data.quiz.settings?.allotMode && window.location.hash === "#allotment") {
+        setTimeout(() => document.getElementById("allotment")?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+      }
     })();
   }, [id]);
 
@@ -109,6 +139,7 @@ export default function EditQuizPage() {
         theme,
         preset: preset || null,
         confirm,
+        allotment: settings.allotMode ? allotment : undefined,
         settings: {
           ...settings,
           closesAt: closesAt ? new Date(closesAt).toISOString() : "",
@@ -155,15 +186,86 @@ export default function EditQuizPage() {
       }
       setPlan(null);
       setDone(
-        data.regraded
-          ? `Saved, and ${data.regraded} submitted attempt${data.regraded === 1 ? " was" : "s were"} re-marked.`
-          : "Saved."
+        [
+          data.regraded
+            ? `Saved, and ${data.regraded} submitted attempt${data.regraded === 1 ? " was" : "s were"} re-marked.`
+            : "Saved.",
+          data.closedByEdit
+            ? "The quiz was closed because a roll on the roster no longer has a question — deal again, then reopen it from the quiz page."
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save.");
     } finally {
       setSaving(false);
     }
+  }
+
+  /**
+   * Deal the bank across the pasted roster. Deterministic per seed; a fresh
+   * seed each click is what makes "Deal again" reshuffle. Manual overrides are
+   * a deliberate act, so re-dealing over them asks first.
+   */
+  function deal() {
+    const parsed = parseRoster(rosterText);
+    const notes: string[] = [];
+    if (parsed.invalid.length) {
+      notes.push(`Skipped (not digits-only roll numbers): ${parsed.invalid.slice(0, 6).join(", ")}${parsed.invalid.length > 6 ? ", …" : ""}.`);
+    }
+    if (parsed.duplicates.length) {
+      notes.push(`Listed once though pasted twice: ${parsed.duplicates.slice(0, 6).join(", ")}${parsed.duplicates.length > 6 ? ", …" : ""}.`);
+    }
+    if (!parsed.rolls.length) {
+      setRosterNote("No roll numbers found — paste them one per line (digits only), or upload a spreadsheet.");
+      return;
+    }
+    const manualCount = allotment?.entries.filter((e) => e.manual).length ?? 0;
+    if (manualCount > 0 && !confirm(`Dealing again discards your ${manualCount} manual change${manualCount === 1 ? "" : "s"}. Continue?`)) {
+      return;
+    }
+    const per = Math.max(1, Math.floor(Number(perStudent)) || 1);
+    const semester = Number(allotSemester);
+    const seed = newSeed();
+    const entries = dealAllotment(rows.map((r) => r.id), parsed.rolls, per, seed);
+    setAllotment({ semester, perStudent: per, seed, entries });
+    setRosterNote(notes.join(" "));
+    setPlan(null);
+  }
+
+  /** Roster from a spreadsheet: the column headed roll-something, else the first. */
+  async function rosterFromFile(file: File) {
+    try {
+      const wb = XLSX.read(await file.arrayBuffer());
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rowsIn = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+      if (!rowsIn.length) throw new Error("the first sheet has no rows.");
+      const headers = Object.keys(rowsIn[0]);
+      const rollHeader = headers.find((h) => /roll/i.test(h)) ?? headers[0];
+      const values = rowsIn.map((r) => String(r[rollHeader] ?? "").trim()).filter(Boolean);
+      if (!values.length) throw new Error(`no values found under “${rollHeader}”.`);
+      setRosterText(values.join("\n"));
+      setRosterNote(`Read ${values.length} rows from the “${rollHeader}” column of ${file.name}. Now deal the questions.`);
+    } catch (err) {
+      setRosterNote(`Could not read the file: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** One roll's hand changed by hand; the row is marked so a re-deal warns. */
+  function overrideQid(roll: string, slot: number, qid: string) {
+    setAllotment((prev) =>
+      prev
+        ? {
+            ...prev,
+            entries: prev.entries.map((e) =>
+              e.roll === roll ? { ...e, qids: e.qids.map((old, j) => (j === slot ? qid : old)), manual: true } : e
+            ),
+          }
+        : prev
+    );
+    setPlan(null);
   }
 
   if (loading) return <main className="mx-auto max-w-3xl px-6 py-24 text-center text-slate-400">Loading…</main>;
@@ -222,7 +324,7 @@ export default function EditQuizPage() {
         Cancel
       </button>
       <span className="text-xs font-semibold text-slate-400">Jump to</span>
-      {SECTIONS.map(([anchor, label]) => (
+      {SECTIONS.filter(([anchor]) => anchor !== "allotment" || settings.allotMode).map(([anchor, label]) => (
         <button
           key={anchor}
           onClick={() => document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" })}
@@ -383,17 +485,22 @@ export default function EditQuizPage() {
               ["peer", "Peer review"],
               ["survey", "Not scored"],
             ] as [GradingMode, string][]
-          ).map(([mode, label]) => (
-            <button
-              key={mode}
-              onClick={() => set({ gradingMode: mode })}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
-                gradingMode === mode ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+          ).map(([mode, label]) => {
+            const blocked = !!settings.allotMode && mode === "peer";
+            return (
+              <button
+                key={mode}
+                onClick={() => !blocked && set({ gradingMode: mode })}
+                disabled={blocked}
+                title={blocked ? "In an allotted test a reviewer would meet a question they never sat, so peer review is unavailable." : undefined}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                  gradingMode === mode ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                } ${blocked ? "cursor-not-allowed opacity-40" : ""}`}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
 
         {writtenCount > 0 && (
@@ -478,7 +585,9 @@ export default function EditQuizPage() {
               ["examMode", "Exam Interface mode"],
               ["mstMode", "Adaptive paper (multistage)"],
             ] as const
-          ).map(([key, label]) => (
+          )
+            .filter(([key]) => !(settings.allotMode && key === "mstMode"))
+            .map(([key, label]) => (
             <label key={key} className="flex items-center gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
@@ -491,7 +600,8 @@ export default function EditQuizPage() {
           ))}
         </div>
 
-        {/* ---------- submission type ---------- */}
+        {/* ---------- submission type (never group work on an allotted test) ---------- */}
+        {!settings.allotMode && (
         <div className="space-y-2 border-t border-slate-100 pt-3">
           <p className="text-sm font-semibold text-slate-900">Submission type</p>
           <div className="flex flex-wrap gap-2 text-sm">
@@ -539,6 +649,7 @@ export default function EditQuizPage() {
             </p>
           )}
         </div>
+        )}
 
         {/* ---------- timer ---------- */}
         <div className="space-y-2 border-t border-slate-100 pt-3 text-sm text-slate-700">
@@ -738,6 +849,143 @@ export default function EditQuizPage() {
           </div>
         )}
       </section>
+
+      {/* ---------- allotment (allotted tests only) ---------- */}
+      {settings.allotMode && (
+        <section id="allotment" className="mt-4 scroll-mt-24 space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
+          <div>
+            <h2 className="font-bold text-slate-900">Allotment — who gets which question</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Paste your class roster, deal the questions, and save. Each roll number is dealt its own question
+              {Number(perStudent) > 1 ? "s" : ""} from the bank below; students look their question up by roll number.
+              The quiz can only be opened once every roll here has a question.
+            </p>
+          </div>
+
+          {/* -- roster in -- */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-sm font-semibold text-slate-700">
+              Roll numbers — one per line, or separated by commas or spaces
+              <textarea
+                value={rosterText}
+                onChange={(e) => setRosterText(e.target.value)}
+                rows={6}
+                placeholder={"1\n2\n3\n…"}
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm font-normal text-slate-900"
+              />
+            </label>
+            <div className="space-y-3 text-sm text-slate-700">
+              <label className="block">
+                <span className="font-semibold">Semester</span> — one for the whole roster; students never pick it
+                <select
+                  value={allotSemester}
+                  onChange={(e) => setAllotSemester(e.target.value)}
+                  className="ml-2 rounded-lg border border-slate-300 px-2 py-1.5"
+                >
+                  {SEMESTER_CHOICES.map((n) => (
+                    <option key={n} value={n}>{semesterLabel(n)}</option>
+                  ))}
+                  <option value={NO_SEMESTER}>{semesterLabel(NO_SEMESTER)}</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="font-semibold">Questions per student</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={Math.max(1, rows.length)}
+                  value={perStudent}
+                  onChange={(e) => setPerStudent(e.target.value)}
+                  className="ml-2 w-20 rounded-lg border border-slate-300 px-3 py-1.5 text-slate-900"
+                />
+              </label>
+              <label className="block text-xs text-slate-500">
+                …or upload a spreadsheet (.xlsx / .csv) — the column headed “roll” is read, else the first column
+                <input
+                  type="file"
+                  accept=".xlsx,.xlsm,.xls,.csv"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) rosterFromFile(f);
+                    e.target.value = "";
+                  }}
+                  className="mt-1 block w-full text-xs text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200"
+                />
+              </label>
+              <button
+                onClick={deal}
+                className="rounded-lg bg-blue-700 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-800"
+              >
+                {allotment ? "Deal again" : "Deal questions"}
+              </button>
+            </div>
+          </div>
+          {rosterNote && <p className="text-xs text-amber-700">{rosterNote}</p>}
+
+          {/* -- the register -- */}
+          {allotment && (() => {
+            const stems = new Map(rows.map((r, i) => [r.id, `Q${i + 1}. ${r.text}`]));
+            const cov = allotmentCoverage(allotment, rows as Question[]);
+            const per = allotment.perStudent;
+            return (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-600">
+                  <span className="font-semibold text-slate-800">{cov.rosterSize}</span> on the roster ·{" "}
+                  {semesterLabel(allotment.semester)} · bank of {rows.length}
+                  {cov.reused > 0 && (
+                    <span className="text-amber-700"> · {cov.reused} question{cov.reused === 1 ? "" : "s"} dealt to more than one student</span>
+                  )}
+                  {cov.unused > 0 && ` · ${cov.unused} unused`}
+                  {cov.unassigned.length > 0 && (
+                    <span className="font-semibold text-red-700"> · {cov.unassigned.length} roll{cov.unassigned.length === 1 ? "" : "s"} with no question</span>
+                  )}
+                </p>
+                <div className="max-h-96 overflow-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-slate-50 text-left text-xs text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2">Roll</th>
+                        <th className="px-3 py-2">Question{per > 1 ? "s" : ""} dealt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allotment.entries.map((e) => (
+                        <tr key={e.roll} className="border-t border-slate-100 align-top">
+                          <td className="px-3 py-2 font-semibold text-slate-900">
+                            {e.roll}
+                            {e.manual && <span className="ml-1.5 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-800">edited</span>}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="space-y-1">
+                              {Array.from({ length: per }, (_, j) => (
+                                <select
+                                  key={j}
+                                  value={e.qids[j] ?? ""}
+                                  onChange={(ev) => overrideQid(e.roll, j, ev.target.value)}
+                                  className="w-full max-w-xl truncate rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+                                >
+                                  {!e.qids[j] && <option value="">— no question —</option>}
+                                  {rows.map((r) => (
+                                    <option key={r.id} value={r.id}>{stems.get(r.id)?.slice(0, 110)}</option>
+                                  ))}
+                                </select>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Change any row by hand with its dropdown — the row is then kept out of automatic re-deals until you
+                  deal again. Nothing here is stored until you save.
+                </p>
+              </div>
+            );
+          })()}
+        </section>
+      )}
 
       {/* ---------- questions ---------- */}
       <section id="questions" className="mt-4 scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5">

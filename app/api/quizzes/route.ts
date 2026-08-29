@@ -73,11 +73,18 @@ export async function POST(req: NextRequest) {
       }
     }
   }
-  const groupMode = !!body.settings?.groupMode;
+  // An allotted test deals every roster roll its own question, which rules out
+  // anything that shares or re-deals the paper: group submissions, the adaptive
+  // router, and peer review (a reviewer would meet a question they never sat).
+  const allotMode = !!body.settings?.allotMode;
+  if (allotMode && body.settings?.gradingMode === "peer") {
+    return NextResponse.json({ error: "An allotted test cannot be peer-reviewed." }, { status: 400 });
+  }
+  const groupMode = !allotMode && !!body.settings?.groupMode;
   const groupMin = groupMode ? Math.min(50, Math.max(1, Math.floor(Number(body.settings?.groupMin)) || 1)) : undefined;
   const groupMax = groupMode ? Math.min(50, Math.max(groupMin ?? 1, Math.floor(Number(body.settings?.groupMax)) || groupMin || 1)) : undefined;
   const examMode = !!body.settings?.examMode;
-  const mstMode = !!body.settings?.mstMode;
+  const mstMode = !allotMode && !!body.settings?.mstMode;
   // The exam interface lets a student roam the paper by its palette, which the
   // per-question timer exists to forbid. Exam mode wins; the teacher form offers
   // the same two timers it leaves standing.
@@ -125,6 +132,7 @@ export async function POST(req: NextRequest) {
     groupMode,
     groupMin,
     groupMax,
+    allotMode: allotMode || undefined,
   };
   /*
    * Tag hygiene at the door: an incoming tag that matches one the teacher
@@ -144,9 +152,11 @@ export async function POST(req: NextRequest) {
   const id = genId();
   const slug = slugify(body.title);
   const preset = findPreset(body.preset)?.id ?? null;
+  // An allotted quiz is born closed: nobody can sit it until the roster is in
+  // and every roll has a question — opening it is what the guardrail checks.
   await q(
-    `INSERT INTO quizzes (id, slug, title, description, intro_media, questions, settings, theme, owner, preset)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    `INSERT INTO quizzes (id, slug, title, description, intro_media, questions, settings, theme, owner, preset, accepting)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       id,
       slug,
@@ -158,6 +168,7 @@ export async function POST(req: NextRequest) {
       typeof body.theme === "string" ? body.theme : "slate",
       owner,
       preset,
+      !allotMode,
     ]
   );
   return NextResponse.json({ id, slug });

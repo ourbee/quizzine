@@ -57,9 +57,17 @@ interface Draft {
 interface PublishResult {
   title: string;
   slug?: string;
+  /** Needed to link an allotted quiz straight to its roster panel. */
+  id?: string;
   qr?: string;
   error?: string;
 }
+
+/** Whose paper this is: one paper for the class, or one question per roll. */
+type PaperType = "same" | "allotted";
+/** The three ways questions arrive; remembered so a repeat visit opens the right card. */
+type IntakePath = "ai" | "upload" | "scratch";
+const PATH_KEY = "quizzine-intake-path";
 
 const TEMPLATE_HEADERS = [
   "Question", "Type", "OptionA", "OptionB", "OptionC", "OptionD",
@@ -172,7 +180,9 @@ function looksLikeSurvey(parsed: ParsedQuiz): boolean {
 
 export default function NewQuizPage() {
   const [step, setStep] = useState<Step>("intake");
-  const [tab, setTab] = useState<"upload" | "paste">("upload");
+  const [paperType, setPaperType] = useState<PaperType>("same");
+  const [path, setPath] = useState<IntakePath>("ai");
+  const [tab, setTab] = useState<"upload" | "paste">("paste");
   const [pasted, setPasted] = useState("");
   const [showPrompt, setShowPrompt] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -228,6 +238,20 @@ export default function NewQuizPage() {
       .then((d) => d && setVocabulary(Object.keys(d.counts ?? {})))
       .catch(() => {});
   }, []);
+
+  // Open on the card this teacher actually uses.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(PATH_KEY);
+      if (saved === "ai" || saved === "upload" || saved === "scratch") setPath(saved);
+    } catch {}
+  }, []);
+  function choosePath(next: IntakePath) {
+    setPath(next);
+    try {
+      localStorage.setItem(PATH_KEY, next);
+    } catch {}
+  }
 
   const selected = useMemo(() => drafts.filter(isIncluded), [drafts]);
   const ready = selected.length > 0 && selected.every((d) => d.errors.length === 0 && d.title.trim() && d.questions.length > 0);
@@ -498,7 +522,7 @@ export default function NewQuizPage() {
   }
 
   async function copyPrompt() {
-    await navigator.clipboard.writeText(aiPrompt(preset || null, vocabulary));
+    await navigator.clipboard.writeText(aiPrompt(preset || null, vocabulary, paperType === "allotted"));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -513,7 +537,9 @@ export default function NewQuizPage() {
       }
     }
     setPublishError("");
+    const allotted = paperType === "allotted";
     const settings = {
+      allotMode: allotted || undefined,
       shuffleQuestions,
       shuffleOptions,
       multiScoring,
@@ -524,15 +550,15 @@ export default function NewQuizPage() {
       hardWordLimit,
       timerMode: effectiveTimerMode,
       examMode,
-      mstMode,
-      mst: mstMode ? mst : undefined,
+      mstMode: allotted ? false : mstMode,
+      mst: !allotted && mstMode ? mst : undefined,
       maxMinutes: effectiveTimerMode === "quiz" ? Number(maxMinutes) : undefined,
       perQuestionSeconds: effectiveTimerMode === "question" ? Number(perQuestionSeconds) : undefined,
       closesAt: closesAt ? new Date(closesAt).toISOString() : undefined,
       allowMultiple,
-      groupMode,
-      groupMin: groupMode ? Number(groupMin) : undefined,
-      groupMax: groupMode ? Number(groupMax) : undefined,
+      groupMode: allotted ? false : groupMode,
+      groupMin: !allotted && groupMode ? Number(groupMin) : undefined,
+      groupMax: !allotted && groupMode ? Number(groupMax) : undefined,
     };
 
     const results: PublishResult[] = [];
@@ -560,7 +586,7 @@ export default function NewQuizPage() {
         }
         const data = await res.json();
         const url = `${window.location.origin}/q/${data.slug}`;
-        results.push({ title: draft.title, slug: data.slug, qr: await QRCode.toDataURL(url, { width: 480, margin: 1 }) });
+        results.push({ title: draft.title, slug: data.slug, id: data.id, qr: await QRCode.toDataURL(url, { width: 480, margin: 1 }) });
       } catch (err) {
         results.push({ title: draft.title, error: err instanceof Error ? err.message : String(err) });
       }
@@ -625,171 +651,272 @@ export default function NewQuizPage() {
         ))}
       </ol>
 
-      {step === "intake" && (
-        <section className="mt-8 space-y-6">
-          <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
-            <p className="text-sm text-blue-900 font-medium">Workflow</p>
-            <p className="text-sm text-blue-800 mt-1">
-              1. Copy the AI prompt below into ChatGPT, Claude or Gemini (attach your source material if any) and add
-              your brief. 2. It will come back with a short numbered list of anything you left open — question types,
-              level, whether it is marked at all — so answer those and it will then build the file. 3. Edit the
-              questions on device if needed, then upload or paste the file it returns. 4. Review everything in the
-              preview here — ask the AI for a corrected file if something is off.
-            </p>
-            <p className="text-sm text-blue-800 mt-2">
-              Already built quizzes for Google Forms? Upload the Apps Script file (.gs or .js) as it is — every form it
-              builds becomes a quiz here. A workbook with several sheets works the same way: one quiz per sheet.
-            </p>
-            <div className="mt-3 rounded-lg border border-blue-200 bg-white p-3">
-              <label className="block text-sm font-semibold text-blue-900">
-                Tag vocabulary
-                <select
-                  value={preset}
-                  onChange={(e) => setPreset(e.target.value)}
-                  className="ml-2 rounded-lg border border-blue-300 px-2 py-1.5 text-sm font-normal text-slate-900"
-                >
-                  <option value="">No fixed list</option>
-                  {TAG_PRESETS.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </label>
-              <p className="mt-2 text-xs text-blue-800">
-                {preset
-                  ? "The prompt below now names this list, so the AI tags every question with the same words each time. Consistent spelling is what lets the strengths and weaknesses report pool five quizzes into one picture — two spellings of one topic split it into two buckets too small to read."
-                  : "Pick a list and it is written into the prompt below, so the AI tags your questions with the same words every time. Without one you can still tag freely, but you will have to keep the spellings consistent yourself."}
-              </p>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button onClick={copyPrompt} className="rounded-lg bg-blue-700 px-4 py-2 text-sm text-white font-semibold hover:bg-blue-800">
-                {copied ? "Copied ✓" : "Copy AI prompt"}
-              </button>
-              <button onClick={() => setShowPrompt((v) => !v)} className="rounded-lg border border-blue-300 px-4 py-2 text-sm font-semibold text-blue-800 hover:bg-blue-100">
-                {showPrompt ? "Hide prompt" : "View prompt"}
-              </button>
-              <button onClick={downloadTemplate} className="rounded-lg border border-blue-300 px-4 py-2 text-sm font-semibold text-blue-800 hover:bg-blue-100">
-                Download Excel template
-              </button>
-            </div>
-            {showPrompt && (
-              <pre className="mt-3 max-h-72 overflow-auto rounded-lg bg-white border border-blue-200 p-3 text-xs whitespace-pre-wrap text-slate-700">{aiPrompt(preset || null, vocabulary)}</pre>
-            )}
-            <details className="mt-3">
-              <summary className="cursor-pointer text-sm font-semibold text-blue-800">What can go in the Type column?</summary>
-              <ul className="mt-2 space-y-1 text-sm text-blue-900">
-                {TYPE_GUIDE.map((t) => (
-                  <li key={t.type}>
-                    <code className="rounded bg-white px-1.5 py-0.5 text-xs font-semibold text-blue-800">{t.type}</code> — {t.what}
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-2 text-xs text-blue-800">
-                A whole quiz can be marked as having no correct answers on the next screen — useful for surveys, opinion
-                polls and work you intend to have peer-reviewed. You get an Excel file by default; say so in your brief
-                if you would rather have JSON, plain text or an Apps Script.
-              </p>
-            </details>
-            <details className="mt-2">
-              <summary className="cursor-pointer text-sm font-semibold text-blue-800">
-                Giving students something to read first — a passage, a sample response, some theory
-              </summary>
-              <p className="mt-2 text-sm text-blue-900">
-                Put it in the <code className="rounded bg-white px-1.5 py-0.5 text-xs font-semibold text-blue-800">Passage</code> column
-                and head it with{" "}
-                <code className="rounded bg-white px-1.5 py-0.5 text-xs font-semibold text-blue-800">PassageTitle</code> — for example
-                &ldquo;Sample response&rdquo; or &ldquo;Read this first&rdquo;. Both are optional and most quizzes leave them empty.
-              </p>
-              <p className="mt-2 text-sm text-blue-900">
-                To put one passage in front of several questions, copy the same text down each of their rows: identical
-                text on neighbouring rows is shown <strong>once</strong>, above them all. Change the text and a new block
-                begins, so one paper can carry a different passage for each section.
-              </p>
-            </details>
+      {step === "intake" && (() => {
+        /* Rendered inside whichever open card needs them, so the finish line of
+           a path sits next to its beginning. Only one card is open at a time,
+           so the single file-input ref is never shared between two mounts. */
+        const dropZone = (
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) handleFile(file);
+            }}
+            onClick={() => fileInput.current?.click()}
+            className={`cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition ${
+              dragOver ? "border-blue-500 bg-blue-50" : "border-slate-300 bg-white hover:border-slate-400"
+            }`}
+          >
+            <p className="font-semibold text-slate-700">Drop your quiz file here, or click to browse</p>
+            <p className="text-sm text-slate-500 mt-1">.xlsx, .csv, .json, .txt, .md — or a Google Apps Script .gs / .js file</p>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".xlsx,.xlsm,.xls,.csv,.json,.txt,.md,.gs,.js"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFile(file);
+                e.target.value = "";
+              }}
+            />
           </div>
-
+        );
+        const pasteBox = (
+          <div>
+            <textarea
+              value={pasted}
+              onChange={(e) => setPasted(e.target.value)}
+              rows={10}
+              placeholder={'Paste the AI\'s final output here — JSON, a Google Apps Script quiz builder, or the plain-text block format:\n\nQ: What is ...?\nType: mcq\nA: ...\nB: ...\nFA: feedback for A\nCorrect: B\nPoints: 1'}
+              className="w-full rounded-xl border border-slate-300 bg-white p-4 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button onClick={handlePaste} disabled={!!parsing} className="mt-2 rounded-lg bg-blue-700 px-5 py-2.5 text-white font-semibold hover:bg-blue-800 disabled:opacity-50">
+              {parsing ? "Reading…" : "Parse questions"}
+            </button>
+          </div>
+        );
+        const feedback = (
+          <>
+            {parsing && <p className="mt-2 text-sm text-slate-500">{parsing}</p>}
+            {parseError && <p className="mt-2 text-sm text-red-600">{parseError}</p>}
+          </>
+        );
+        const cardHeader = (target: IntakePath, title: string, sub: string) => (
+          <button onClick={() => choosePath(target)} className="flex w-full items-baseline gap-2 text-left" aria-expanded={path === target}>
+            <span className={`text-base font-bold ${path === target ? "text-slate-900" : "text-slate-600"}`}>{title}</span>
+            <span className="min-w-0 flex-1 truncate text-xs text-slate-500">{sub}</span>
+            <span className="text-xs text-slate-400">{path === target ? "▾" : "▸"}</span>
+          </button>
+        );
+        return (
+        <section className="mt-8 space-y-5">
+          {/* ---------- zone 1: whose paper ---------- */}
           <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <p className="text-sm font-semibold text-slate-900">Or start from scratch</p>
-            <div className="mt-2 flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold text-slate-900">Paper type</p>
               {(
                 [
-                  ["mcq", "Multiple choice"],
-                  ["written", "Written answers"],
-                  ["poll", "Poll"],
-                ] as ["mcq" | "written" | "poll", string][]
-              ).map(([kind, label]) => (
+                  ["same", "Same paper for everyone"],
+                  ["allotted", "Allotted test — each student gets their own question"],
+                ] as [PaperType, string][]
+              ).map(([value, label]) => (
                 <button
-                  key={kind}
-                  onClick={() => startFromScratch(kind)}
-                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                  key={value}
+                  onClick={() => setPaperType(value)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                    paperType === value ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                  }`}
                 >
                   {label}
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-xs text-slate-500">
-              One question to start with, opened straight in the editor: a marked multiple-choice question, an essay
-              marked against a rubric (with an optional AI pass you review, never one that marks on your behalf), or a
-              poll whose answers are collected and never marked. Add as many more as you like there, change any
-              question&rsquo;s type as you go, or upload a file instead.
-            </p>
+            {paperType === "allotted" && (
+              <p className="mt-2 text-xs text-slate-600">
+                The questions you add here become a <span className="font-semibold">bank</span>: after publishing, you
+                attach your class roster and Quizzine deals each roll number its own question. The quiz stays closed
+                until every roll on the roster has one. Group work, adaptive papers and peer review do not apply.
+              </p>
+            )}
           </div>
 
-          <div className="flex gap-2 text-sm font-semibold">
-            <button onClick={() => setTab("upload")} className={`rounded-lg px-4 py-2 ${tab === "upload" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}>
-              Upload a file
-            </button>
-            <button onClick={() => setTab("paste")} className={`rounded-lg px-4 py-2 ${tab === "paste" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}>
-              Paste text / JSON / script
-            </button>
+          {/* ---------- zone 2: how questions arrive ---------- */}
+          <p className="text-sm font-semibold text-slate-900">How do you want to add questions?</p>
+
+          <div className={`rounded-xl border p-4 ${path === "ai" ? "border-blue-300 bg-blue-50/40" : "border-slate-200 bg-white"}`}>
+            {cardHeader("ai", "✨ Build with AI", "recommended — ChatGPT, Claude or Gemini writes the file, you review it here")}
+            {path === "ai" && (
+              <ol className="mt-4 space-y-4">
+                <li className="flex gap-3">
+                  <span className="mt-0.5 h-6 w-6 shrink-0 rounded-full bg-blue-700 text-center text-sm font-bold leading-6 text-white">1</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-900">Copy the prompt</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button onClick={copyPrompt} className="rounded-lg bg-blue-700 px-4 py-2 text-sm text-white font-semibold hover:bg-blue-800">
+                        {copied ? "Copied ✓" : "Copy AI prompt"}
+                      </button>
+                      <button onClick={() => setShowPrompt((v) => !v)} className="text-sm font-semibold text-blue-800 underline underline-offset-2 hover:text-blue-900">
+                        {showPrompt ? "Hide prompt" : "View prompt"}
+                      </button>
+                    </div>
+                    {showPrompt && (
+                      <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-white border border-slate-200 p-3 text-xs whitespace-pre-wrap text-slate-700">{aiPrompt(preset || null, vocabulary, paperType === "allotted")}</pre>
+                    )}
+                    <details className="mt-2">
+                      <summary className="cursor-pointer text-xs font-semibold text-slate-600">Options — tag vocabulary</summary>
+                      <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3">
+                        <label className="block text-sm font-semibold text-slate-800">
+                          Tag vocabulary
+                          <select
+                            value={preset}
+                            onChange={(e) => setPreset(e.target.value)}
+                            className="ml-2 rounded-lg border border-slate-300 px-2 py-1.5 text-sm font-normal text-slate-900"
+                          >
+                            <option value="">No fixed list</option>
+                            {TAG_PRESETS.map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {preset
+                            ? "The prompt now names this list, so the AI tags every question with the same words each time — which is what lets the strengths and weaknesses report pool five quizzes into one picture."
+                            : "Pick a list and it is written into the prompt, so the AI tags your questions with the same words every time. Without one you can still tag freely, but you keep the spellings consistent yourself."}
+                        </p>
+                      </div>
+                    </details>
+                  </div>
+                </li>
+                <li className="flex gap-3">
+                  <span className="mt-0.5 h-6 w-6 shrink-0 rounded-full bg-blue-700 text-center text-sm font-bold leading-6 text-white">2</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-900">Chat</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Paste it into ChatGPT, Claude or Gemini with your brief and any source material. It will ask about
+                      anything you left open — question types, level, marking — then return a quiz file.
+                    </p>
+                  </div>
+                </li>
+                <li className="flex gap-3">
+                  <span className="mt-0.5 h-6 w-6 shrink-0 rounded-full bg-blue-700 text-center text-sm font-bold leading-6 text-white">3</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-900">Bring back the result</p>
+                    <div className="mt-2 flex gap-2 text-xs font-semibold">
+                      <button onClick={() => setTab("paste")} className={`rounded-lg px-3 py-1.5 ${tab === "paste" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}>
+                        Paste it
+                      </button>
+                      <button onClick={() => setTab("upload")} className={`rounded-lg px-3 py-1.5 ${tab === "upload" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}>
+                        Upload the file
+                      </button>
+                    </div>
+                    <div className="mt-2">{tab === "paste" ? pasteBox : dropZone}</div>
+                    {feedback}
+                  </div>
+                </li>
+              </ol>
+            )}
           </div>
 
-          {tab === "upload" ? (
-            <div
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragOver(false);
-                const file = e.dataTransfer.files?.[0];
-                if (file) handleFile(file);
-              }}
-              onClick={() => fileInput.current?.click()}
-              className={`cursor-pointer rounded-xl border-2 border-dashed p-12 text-center transition ${
-                dragOver ? "border-blue-500 bg-blue-50" : "border-slate-300 bg-white hover:border-slate-400"
-              }`}
-            >
-              <p className="font-semibold text-slate-700">Drop your quiz file here, or click to browse</p>
-              <p className="text-sm text-slate-500 mt-1">.xlsx, .csv, .json, .txt, .md — or a Google Apps Script .gs / .js file</p>
-              <input
-                ref={fileInput}
-                type="file"
-                accept=".xlsx,.xlsm,.xls,.csv,.json,.txt,.md,.gs,.js"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleFile(file);
-                  e.target.value = "";
-                }}
-              />
+          <div className={`rounded-xl border p-4 ${path === "upload" ? "border-slate-300 bg-white" : "border-slate-200 bg-white"}`}>
+            {cardHeader("upload", "📄 Upload a file I already have", "a spreadsheet, JSON, text file or Google Forms Apps Script")}
+            {path === "upload" && (
+              <div className="mt-4 space-y-3">
+                {dropZone}
+                {feedback}
+                <div className="flex gap-2 text-xs font-semibold">
+                  <button onClick={() => setTab("paste")} className="text-slate-600 underline underline-offset-2 hover:text-slate-900">
+                    {tab === "paste" ? "…or drop the file above" : "Or paste it as text instead"}
+                  </button>
+                </div>
+                {tab === "paste" && (
+                  <>
+                    {pasteBox}
+                  </>
+                )}
+                <p className="text-xs text-slate-500">
+                  Already built quizzes for Google Forms? Upload the Apps Script file (.gs or .js) as it is — every form
+                  it builds becomes a quiz here. A workbook with several sheets works the same way: one quiz per sheet.
+                </p>
+                <button onClick={downloadTemplate} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+                  Download Excel template
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            {cardHeader("scratch", "✏️ Start from scratch", "write questions in the editor, one at a time")}
+            {path === "scratch" && (
+              <div className="mt-4">
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      ["mcq", "Multiple choice"],
+                      ["written", "Written answers"],
+                      ["poll", "Poll"],
+                    ] as ["mcq" | "written" | "poll", string][]
+                  ).map(([kind, label]) => (
+                    <button
+                      key={kind}
+                      onClick={() => startFromScratch(kind)}
+                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  One question of that kind opens straight in the editor. Add as many more as you like there, and change
+                  any question&rsquo;s type as you go.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* ---------- zone 3: reference ---------- */}
+          <details className="rounded-xl border border-slate-200 bg-white p-4">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-700">Format reference — question types and passages</summary>
+            <div className="mt-3 space-y-3 text-sm text-slate-700">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-400">The Type column</p>
+                <ul className="mt-1.5 space-y-1">
+                  {TYPE_GUIDE.map((t) => (
+                    <li key={t.type}>
+                      <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-semibold text-slate-700">{t.type}</code> — {t.what}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs text-slate-500">
+                  A whole quiz can be marked as having no correct answers on the next screen — useful for surveys,
+                  opinion polls and work you intend to have peer-reviewed. The AI gives you an Excel file by default;
+                  say so in your brief if you would rather have JSON, plain text or an Apps Script.
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                  Giving students something to read first — a passage, a sample response, some theory
+                </p>
+                <p className="mt-1.5">
+                  Put it in the <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-semibold text-slate-700">Passage</code> column
+                  and head it with{" "}
+                  <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-semibold text-slate-700">PassageTitle</code> — for example
+                  &ldquo;Sample response&rdquo; or &ldquo;Read this first&rdquo;. Both are optional and most quizzes leave them empty.
+                </p>
+                <p className="mt-2">
+                  To put one passage in front of several questions, copy the same text down each of their rows: identical
+                  text on neighbouring rows is shown <strong>once</strong>, above them all. Change the text and a new
+                  block begins, so one paper can carry a different passage for each section.
+                </p>
+              </div>
             </div>
-          ) : (
-            <div>
-              <textarea
-                value={pasted}
-                onChange={(e) => setPasted(e.target.value)}
-                rows={12}
-                placeholder={'Paste the AI\'s final output here — JSON, a Google Apps Script quiz builder, or the plain-text block format:\n\nQ: What is ...?\nType: mcq\nA: ...\nB: ...\nFA: feedback for A\nCorrect: B\nPoints: 1'}
-                className="w-full rounded-xl border border-slate-300 bg-white p-4 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <button onClick={handlePaste} disabled={!!parsing} className="mt-3 rounded-lg bg-blue-700 px-5 py-2.5 text-white font-semibold hover:bg-blue-800 disabled:opacity-50">
-                {parsing ? "Reading…" : "Parse questions"}
-              </button>
-            </div>
-          )}
-          {parsing && <p className="text-sm text-slate-500">{parsing}</p>}
-          {parseError && <p className="text-sm text-red-600">{parseError}</p>}
+          </details>
         </section>
-      )}
+        );
+      })()}
 
       {step === "review" && (
         <section className="mt-8 space-y-5">
@@ -935,17 +1062,22 @@ export default function NewQuizPage() {
                             ["peer", "Peer review"],
                             ["survey", "Not scored"],
                           ] as [GradingMode, string][]
-                        ).map(([mode, label]) => (
-                          <button
-                            key={mode}
-                            onClick={() => setGradingMode(draft.id, mode)}
-                            className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
-                              draft.gradingMode === mode ? "bg-slate-900 text-white" : "bg-white border border-slate-300 text-slate-600 hover:bg-slate-100"
-                            }`}
-                          >
-                            {label}
-                          </button>
-                        ))}
+                        ).map(([mode, label]) => {
+                          const blocked = paperType === "allotted" && mode === "peer";
+                          return (
+                            <button
+                              key={mode}
+                              onClick={() => !blocked && setGradingMode(draft.id, mode)}
+                              disabled={blocked}
+                              title={blocked ? "In an allotted test a reviewer would meet a question they never sat, so peer review is unavailable." : undefined}
+                              className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                                draft.gradingMode === mode ? "bg-slate-900 text-white" : "bg-white border border-slate-300 text-slate-600 hover:bg-slate-100"
+                              } ${blocked ? "cursor-not-allowed opacity-40" : ""}`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
                       </div>
                       <p className="mt-2 text-xs text-slate-600">
                         {draft.gradingMode === "peer"
@@ -1134,6 +1266,13 @@ export default function NewQuizPage() {
               These settings apply to all {selected.length} quizzes you are publishing.
             </p>
           )}
+          {paperType === "allotted" && (
+            <p className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+              <span className="font-semibold">Allotted test.</span> This publishes closed: the next step is attaching
+              your class roster on the quiz&rsquo;s edit page, and the quiz opens once every roll number has a question
+              dealt to it. Group work and adaptive papers do not apply here, so those settings are hidden.
+            </p>
+          )}
           <div>
             <p className="font-semibold text-slate-900 text-sm">Theme</p>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -1151,6 +1290,7 @@ export default function NewQuizPage() {
             </div>
           </div>
 
+          {paperType === "same" && (
           <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
             <p className="font-semibold text-slate-900 text-sm">Submission type</p>
             <div className="flex flex-wrap gap-2 text-sm">
@@ -1184,6 +1324,7 @@ export default function NewQuizPage() {
               <p className="text-xs text-slate-500">Each student submits their own attempt with their name, roll number and semester.</p>
             )}
           </div>
+          )}
 
           <div className="grid sm:grid-cols-2 gap-4">
             <label className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white p-3 text-sm">
@@ -1389,6 +1530,7 @@ export default function NewQuizPage() {
             </label>
           </div>
 
+          {paperType === "same" && (
           <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
             <label className="flex items-start gap-2.5 text-sm">
               <input
@@ -1547,6 +1689,7 @@ export default function NewQuizPage() {
               </div>
             )}
           </div>
+          )}
 
           <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
             <p className="font-semibold text-slate-900 text-sm">Timer</p>
@@ -1631,9 +1774,27 @@ export default function NewQuizPage() {
           <div className="rounded-xl border border-green-200 bg-green-50 p-6 text-center">
             <p className="text-2xl">🎉</p>
             <h2 className="mt-1 text-xl font-bold text-green-900">
-              {liveOnes.length > 1 ? `${liveOnes.length} quizzes are live` : `“${liveOnes[0]?.title}” is live`}
+              {paperType === "allotted"
+                ? liveOnes.length > 1
+                  ? `${liveOnes.length} allotted tests are published`
+                  : `“${liveOnes[0]?.title}” is published`
+                : liveOnes.length > 1
+                  ? `${liveOnes.length} quizzes are live`
+                  : `“${liveOnes[0]?.title}” is live`}
             </h2>
-            <p className="mt-2 text-sm text-green-800">Share the link (or the QR code) with your students:</p>
+            <p className="mt-2 text-sm text-green-800">
+              {paperType === "allotted"
+                ? "One step left: attach your class roster and deal the questions. The quiz stays closed to students until every roll number has one."
+                : "Share the link (or the QR code) with your students:"}
+            </p>
+            {paperType === "allotted" && liveOnes[0]?.id && (
+              <Link
+                href={`/teacher/quiz/${liveOnes[0].id}/edit#allotment`}
+                className="mt-3 inline-block rounded-lg bg-green-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-800"
+              >
+                Attach the roster →
+              </Link>
+            )}
             {liveOnes.length > 1 && (
               <button
                 onClick={() => navigator.clipboard.writeText(liveOnes.map((p) => `${p.title}: ${origin}/q/${p.slug}`).join("\n"))}
@@ -1674,6 +1835,14 @@ export default function NewQuizPage() {
                     <a href={url} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">
                       Open as student
                     </a>
+                    {paperType === "allotted" && p.id && (
+                      <Link
+                        href={`/teacher/quiz/${p.id}/edit#allotment`}
+                        className="rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-semibold text-green-800 hover:bg-green-100"
+                      >
+                        Attach roster
+                      </Link>
+                    )}
                   </div>
                 </div>
               </div>

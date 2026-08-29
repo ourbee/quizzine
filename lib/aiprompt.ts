@@ -169,6 +169,15 @@ FORMAT D — Google Apps Script: a .gs / .js file that builds the quiz as a Goog
 
 Use no markdown bold/italics inside the final output values.`;
 
+/**
+ * Appended when the teacher is building an allotted test. It changes the
+ * brief, never the file format — the same parsers read the result.
+ */
+export const ALLOT_SECTION = `
+
+THIS IS AN ALLOTTED TEST:
+My app will deal each question in this file to a different student by roll number — a student sees only the question(s) dealt to them, so no two students necessarily share a question. Because of that: generate a BANK of distinct questions (ask me how many students I have if I have not said), all on the same topic and syllabus, of comparable difficulty and length, and each fully self-contained — no question may refer to another question or to shared numbering. Fairness matters more than variety: a student should not be able to complain their question was harder than their neighbour's. The output format is exactly as described above.`;
+
 /** The tag vocabulary section appended to the prompt for a chosen preset. */
 export function presetPromptSection(preset: TagPreset): string {
   const lines = preset.dimensions.map((d) => {
@@ -210,9 +219,10 @@ export function existingTagsSection(tags: string[]): string {
  * The prompt, with a preset's vocabulary spliced in where one is chosen and the
  * teacher's own existing tags listed where there are any.
  */
-export function aiPrompt(presetId?: string | null, existingTags: string[] = []): string {
+export function aiPrompt(presetId?: string | null, existingTags: string[] = [], allotted = false): string {
   const preset = findPreset(presetId);
   const mine = existingTagsSection(existingTags);
+  const allot = allotted ? ALLOT_SECTION : "";
   if (!preset) {
     const names = TAG_PRESETS.map((p) => p.name).join(", ");
     return `${AI_PROMPT}
@@ -222,7 +232,7 @@ ${
       existingTags.length
         ? "The list below is the vocabulary — it is what my earlier quizzes actually use."
         : `I have not fixed one. Propose a short list of dimensions and values for this subject in step 1 and let me approve it, so that every quiz after this one uses the same words. (Quizzine ships ready-made lists for: ${names}.)`
-    }${mine}`;
+    }${mine}${allot}`;
   }
-  return AI_PROMPT + presetPromptSection(preset) + mine;
+  return AI_PROMPT + presetPromptSection(preset) + mine + allot;
 }

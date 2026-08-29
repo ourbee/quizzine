@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
+import { allotmentProblems, normalizeAllotment } from "@/lib/allot";
 import { currentTeacher } from "@/lib/auth";
 import { planEdit } from "@/lib/edit";
 import { grade } from "@/lib/grade";
@@ -35,7 +36,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   const quiz = await ownedQuiz(id, owner);
   if (!quiz) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const attempts = await q(
-    `SELECT id, student, group_info, answers, per_question, score, max_score, flags, status, started_at, submitted_at
+    `SELECT id, student, group_info, answers, per_question, score, max_score, flags, status, started_at, submitted_at, allotted
        FROM attempts WHERE quiz_id = $1 AND status = 'submitted'
       ORDER BY submitted_at ASC`,
     [id]
@@ -182,10 +183,35 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
 
   const preset = body.preset !== undefined ? (findPreset(body.preset)?.id ?? null) : (stored.preset ?? null);
 
+  // Allotted mode is fixed at creation (the spread above carries it), and it
+  // keeps its exclusions on every edit: no groups, no adaptive routing, no peer.
+  if (settings.allotMode) {
+    settings.groupMode = false;
+    settings.groupMin = undefined;
+    settings.groupMax = undefined;
+    settings.mstMode = false;
+    settings.mst = undefined;
+    if (settings.gradingMode === "peer") settings.gradingMode = "rubric";
+  }
+  // The roster and its deal ride the same save as everything else. Whatever is
+  // stored is re-read against the questions as they now stand, so a deleted
+  // question drops out of every hand it was in — and if that leaves a roll
+  // empty while students could still start, the quiz is closed rather than
+  // letting the next student in with nothing to sit.
+  const validQids = new Set(questions.map((qn) => qn.id));
+  const allotment = settings.allotMode
+    ? normalizeAllotment(body.allotment !== undefined ? body.allotment : stored.allotment, validQids)
+    : null;
+  let closedByEdit = false;
+  if (settings.allotMode && stored.accepting && allotmentProblems(allotment, questions).length) {
+    closedByEdit = true;
+    await q(`UPDATE quizzes SET accepting = false WHERE id = $1`, [id]);
+  }
+
   await q(
     `UPDATE quizzes
         SET title = $1, description = $2, intro_media = $3, questions = $4,
-            settings = $5, theme = $6, preset = $7
+            settings = $5, theme = $6, preset = $7, allotment = $9
       WHERE id = $8`,
     [
       typeof body.title === "string" && body.title.trim() ? body.title.trim() : stored.title,
@@ -200,6 +226,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       typeof body.theme === "string" ? body.theme : stored.theme,
       preset,
       id,
+      allotment ? JSON.stringify(allotment) : null,
     ]
   );
 
@@ -208,7 +235,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     regraded = await regradeAttempts(id, questions, settings);
   }
 
-  return NextResponse.json({ ok: true, plan: { ...plan, questions: undefined }, regraded });
+  return NextResponse.json({ ok: true, plan: { ...plan, questions: undefined }, regraded, closedByEdit });
 }
 
 /**
@@ -257,9 +284,19 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   const owner = await currentTeacher();
   if (!owner) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await ctx.params;
-  if (!(await ownedQuiz(id, owner))) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const stored = await ownedQuiz(id, owner);
+  if (!stored) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const body = await req.json().catch(() => ({}));
   if (typeof body.accepting === "boolean") {
+    // The one gate every open passes through: an allotted quiz cannot start
+    // taking responses while any roster roll would find no question waiting.
+    const settings = (stored.settings ?? {}) as QuizSettings;
+    if (body.accepting && settings.allotMode) {
+      const questions = (stored.questions ?? []) as Question[];
+      const allotment = normalizeAllotment(stored.allotment, new Set(questions.map((qn) => qn.id)));
+      const problems = allotmentProblems(allotment, questions);
+      if (problems.length) return NextResponse.json({ error: problems[0] }, { status: 400 });
+    }
     await q(`UPDATE quizzes SET accepting = $1 WHERE id = $2`, [body.accepting, id]);
   }
   return NextResponse.json({ ok: true });
