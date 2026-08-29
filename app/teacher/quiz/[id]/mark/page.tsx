@@ -276,6 +276,16 @@ export default function MarkPage() {
     await load();
   }
 
+  /** Rub out a pencil mark: the AI's suggestion goes, the answer returns to unmarked. */
+  async function erase(attemptId: string, qid: string) {
+    const body = await post({ action: "clear", reviewer: "ai", attemptId, qid }, `erase-${attemptId}-${qid}`);
+    if (!body) return;
+    setDrafts((d) => ({ ...d, [key(attemptId, qid)]: blankDraft() }));
+    setNote("Erased.");
+    setTimeout(() => setNote(""), 1500);
+    await load();
+  }
+
   /** Save every answer to the question on screen that has been edited. */
   async function saveAllOnQuestion() {
     if (!data || !question) return;
@@ -406,11 +416,42 @@ export default function MarkPage() {
     const awarded = awardedFor(percent, qn.points);
     const stored = a.marking?.[qn.id];
     const badges = telemetryBadges(a.telemetry?.[qn.id], answer.length);
+    /*
+     * Pencil or ink.
+     *
+     * An AI suggestion that nobody has touched is written in pencil: it is on
+     * the page, it can be read, and it is not yet anybody's judgement. Saving
+     * it — unedited or rewritten, it makes no difference — inks it in. The
+     * distinction was previously a sentence in a violet box, which is a thing
+     * to read rather than a thing to see.
+     */
+    const inPencil = !!stored?.ai && !stored?.teacher;
+    const inked = !!stored?.teacher;
 
     return (
-      <div key={k} className="rounded-xl border border-slate-200 bg-white p-4">
+      <div
+        key={k}
+        className={`rounded-xl border bg-white p-4 ${
+          inPencil ? "border-dashed border-violet-300" : "border-slate-200"
+        }`}
+      >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="font-semibold text-slate-900">{heading}</p>
+          <div className="flex items-center gap-2">
+            <p className="font-semibold text-slate-900">{heading}</p>
+            {inPencil && (
+              <span
+                className="rounded-full border border-dashed border-violet-400 px-2 py-0.5 text-[11px] font-medium italic text-violet-700"
+                title="A chatbot wrote this. It is not your mark until you save it."
+              >
+                in pencil
+              </span>
+            )}
+            {inked && (
+              <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[11px] font-medium text-white" title="Your mark, saved.">
+                inked
+              </span>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             {a.flags?.late && <span className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800">late</span>}
             {!!qn.wordLimit && (
@@ -438,18 +479,23 @@ export default function MarkPage() {
         </div>
 
         {blank ? (
-          <p className="mt-3 rounded-lg border border-dashed border-slate-300 px-3 py-4 text-center text-sm italic text-slate-500">
-            No response — 0 marks. You can still leave a comment.
-          </p>
+          <div className="mt-3 grid place-items-center rounded-lg border border-dashed border-slate-300 py-5">
+            <span className="-rotate-6 rounded border-2 border-slate-400 px-3 py-1 text-xs font-bold uppercase tracking-widest text-slate-400">
+              Left blank
+            </span>
+            <span className="mt-2 text-xs text-slate-500">0 marks. You can still leave a comment.</span>
+          </div>
         ) : (
-          <p className="mt-3 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-3 text-sm text-slate-800">{answer}</p>
+          // An overrun rules its own margin, the way a marker would draw one.
+          <p
+            className={`mt-3 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-3 text-sm text-slate-800 ${
+              qn.wordLimit && words > qn.wordLimit ? "border-l-4 border-red-400 pl-3" : ""
+            }`}
+          >
+            {answer}
+          </p>
         )}
 
-        {stored?.ai && !stored.teacher && (
-          <p className="mt-3 rounded-lg bg-violet-50 px-3 py-2 text-xs font-medium text-violet-800">
-            AI suggestion — edit freely. Nothing here is released until you release it.
-          </p>
-        )}
 
         <div className="mt-4 space-y-2">
           {data.rubric.bands.map((band) => (
@@ -500,12 +546,22 @@ export default function MarkPage() {
           </span>
           <div className="flex items-center gap-2">
             {draft.dirty && <span className="text-xs font-medium text-amber-700">unsaved</span>}
+            {inPencil && (
+              <button
+                onClick={() => erase(a.id, qn.id)}
+                disabled={!!busy}
+                className="rounded-lg border border-violet-300 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-40"
+                title="Rub out the chatbot's suggestion and mark this one yourself."
+              >
+                {busy === `erase-${a.id}-${qn.id}` ? "Erasing…" : "Erase"}
+              </button>
+            )}
             <button
               onClick={() => saveOne(a.id, qn.id)}
               disabled={!!busy}
               className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-40"
             >
-              {busy === `save-${a.id}-${qn.id}` ? "Saving…" : "Save"}
+              {busy === `save-${a.id}-${qn.id}` ? "Saving…" : inPencil ? "Ink it in" : "Save"}
             </button>
           </div>
         </div>
@@ -537,29 +593,52 @@ export default function MarkPage() {
   // ---------- the marking package, at whichever scope the teacher wants ----------
 
   /*
-   * One package, three scopes. Question scope marks best and stays the default;
-   * student and batch scope exist because a teacher with twelve questions was
-   * otherwise made to do twelve copy-paste round trips to mark one class, and
-   * that cost is real even where the marking is a little better for it. The
-   * trade-off is stated on screen rather than decided for them.
+   * One package, two choices — never three.
+   *
+   * The scope selector used to offer question, student and quiz from wherever
+   * you stood, which let "This student" be selected in the question view, where
+   * no student is on screen to name. It then silently targeted whoever the
+   * hidden per-student index happened to point at. A scope whose target you can
+   * neither see nor change is not a choice, so the third option is simply not
+   * offered: each view shows its own unit, and the whole quiz.
+   *
+   * The counts are computed straight from the answers rather than by building a
+   * package per choice, so a label can say what it will cost before you pick it.
    */
-  const scopeChoices: { id: PackScope; label: string; note: string; disabled: boolean }[] = [
-    { id: "question", label: "This question", note: "Every response to the question on screen. Marks most consistently — the model holds one question in mind and grades the class against each other.", disabled: !question },
-    { id: "student", label: "This student", note: "One student's answers to every written question, in one package. What you want when you are working through a pile person by person, or re-marking one paper.", disabled: !attempt },
-    { id: "batch", label: "Whole quiz", note: "Every answer to every question, in the fewest round trips. Ordered question by question so a part still holds one question's answers together, but the model's attention is spread thinnest here — read what comes back.", disabled: !data.questions.length || !data.attempts.length },
+  const typed = (attemptId: string, qid: string) => !!data.attempts.find((a) => a.id === attemptId)?.answers[qid]?.trim();
+  const countFor = (scope: PackScope): number => {
+    if (scope === "question")
+      return question ? data.attempts.filter((a) => typed(a.id, question.id)).length : 0;
+    if (scope === "student")
+      return attempt ? data.questions.filter((qn) => typed(attempt.id, qn.id)).length : 0;
+    return data.attempts.reduce((n, a) => n + data.questions.filter((qn) => typed(a.id, qn.id)).length, 0);
+  };
+
+  const unitChoice: { id: PackScope; label: string; note: string } =
+    view === "question"
+      ? {
+          id: "question",
+          label: question ? `Q${qIndex + 1}` : "This question",
+          note: "Every answer to the question on screen. Marks most consistently — one question held in mind, the class graded against itself.",
+        }
+      : {
+          id: "student",
+          label: attempt ? attempt.name : "This student",
+          note: "One student's answers to every written question. What you want when you are working through a pile person by person.",
+        };
+  const scopeChoices: { id: PackScope; label: string; note: string; count: number }[] = [
+    { ...unitChoice, count: countFor(unitChoice.id) },
+    {
+      id: "batch",
+      label: "Whole quiz",
+      note: "Every answer to every question, in the fewest round trips. Grouped question by question, but the model's attention is spread thinnest here — read what comes back.",
+      count: countFor("batch"),
+    },
   ];
-  const activeScope = scopeChoices.find((c) => c.id === pkgScope);
+  const activeScope = scopeChoices.find((c) => c.id === pkgScope) ?? scopeChoices[0];
   const covered = pack ? Object.keys(pack.codeMap).length : 0;
-  const scopeTarget =
-    pkgScope === "question"
-      ? question
-        ? `Q${qIndex + 1} · ${data.attempts.length} response${data.attempts.length === 1 ? "" : "s"}`
-        : "—"
-      : pkgScope === "student"
-        ? attempt
-          ? `${attempt.name} · ${attempt.roll} · ${data.questions.length} question${data.questions.length === 1 ? "" : "s"}`
-          : "—"
-        : `${data.questions.length} question${data.questions.length === 1 ? "" : "s"} × ${data.attempts.length} response${data.attempts.length === 1 ? "" : "s"}`;
+  // Codes only grow a question half when the package actually spans questions.
+  const codesCarryQuestion = pkgScope !== "question" && data.questions.length > 1;
 
   const aiPanel = (
     <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50/50 p-4">
@@ -569,30 +648,34 @@ export default function MarkPage() {
       {showAi && (
         <div className="mt-3 space-y-3 text-sm">
           <p className="text-xs text-violet-900">
-            Copy the package below into whichever chatbot you use, then paste its reply back here. No key, no account,
-            nothing sent from Quizzine. Names never enter the package — answers travel under codes, and only Quizzine
-            knows which is whose.
+            Copy a package into whichever chatbot you use, then paste its reply back here. No key, no account, nothing
+            sent from Quizzine, and no names in the package — answers travel under codes only Quizzine can resolve.
           </p>
 
           <div>
             <p className="text-[11px] font-bold uppercase tracking-wide text-violet-900">Package</p>
-            <div className="mt-1 flex flex-wrap gap-2">
-              {scopeChoices.map((choice) => (
-                <button
-                  key={choice.id}
-                  onClick={() => setPkgScope(choice.id)}
-                  disabled={choice.disabled}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-40 ${
-                    choice.id === pkgScope
-                      ? "bg-violet-700 text-white"
-                      : "border border-violet-300 bg-white text-violet-800 hover:bg-violet-100"
-                  }`}
-                >
-                  {choice.label}
-                </button>
-              ))}
+            <div className="mt-1 grid gap-2 sm:grid-cols-2">
+              {scopeChoices.map((choice) => {
+                const on = choice.id === pkgScope;
+                return (
+                  <button
+                    key={choice.id}
+                    onClick={() => setPkgScope(choice.id)}
+                    disabled={!choice.count}
+                    aria-pressed={on}
+                    className={`rounded-lg px-3 py-2 text-left disabled:opacity-40 ${
+                      on ? "bg-violet-700 text-white" : "border border-violet-300 bg-white text-violet-900 hover:bg-violet-100"
+                    }`}
+                  >
+                    <span className="block text-xs font-bold">{choice.label}</span>
+                    <span className={`block text-[11px] ${on ? "text-violet-200" : "text-slate-500"}`}>
+                      {choice.count} answer{choice.count === 1 ? "" : "s"}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-            <p className="mt-1.5 text-xs text-slate-600">{activeScope?.note}</p>
+            <p className="mt-1.5 text-xs text-slate-600">{activeScope.note}</p>
           </div>
 
           {!pack || !covered ? (
@@ -602,22 +685,21 @@ export default function MarkPage() {
           ) : (
             <>
               <p className="rounded-lg bg-white p-2 text-xs text-slate-600">
-                <strong>{scopeTarget}</strong> — {covered} answer{covered === 1 ? "" : "s"},{" "}
                 {pack.totalWords.toLocaleString()} words
-                {pack.parts.length > 1 ? `, split into ${pack.parts.length} parts.` : "."}
-                {pack.parts.length > 1 && (
+                {pack.parts.length > 1 ? (
                   <>
                     {" "}
-                    Use a <strong>fresh chat for each part</strong> — a long conversation marks the later answers worse
-                    than the earlier ones. Parts marked in separate chats can drift a little against each other; your
-                    review pass is the correction for that.
+                    across {pack.parts.length} parts. Use a <strong>fresh chat for each part</strong> — a long
+                    conversation marks the later answers worse than the earlier ones, and your review pass is the
+                    correction for the drift between them.
                   </>
+                ) : (
+                  ", small enough to send in one go."
                 )}
-                {pkgScope !== "question" && (
+                {codesCarryQuestion && (
                   <>
                     {" "}
-                    Codes here are like <strong>R3Q2</strong> — response 3, question 2 — so a reply that drops the
-                    question half is refused rather than guessed at.
+                    Codes are <strong>R3Q2</strong> — response 3, question 2.
                   </>
                 )}
               </p>
@@ -716,6 +798,38 @@ export default function MarkPage() {
   const phase = data.quiz.phase;
   const released = phase === "closed";
 
+  /** The three notches, in the order a quiz actually travels through them. */
+  const PHASES = [
+    {
+      id: "responding",
+      label: "Taking responses",
+      tone: "bg-blue-600 text-white",
+      note: "The link is open and students can still submit. Marking what is already in is fine — late arrivals simply appear.",
+    },
+    {
+      id: "reviewing",
+      label: "Marking",
+      tone: "bg-amber-500 text-white",
+      note: "Closed to new responses, open to you. Students see “response recorded” and nothing else until you slide the bolt across.",
+    },
+    {
+      id: "closed",
+      label: "Results out",
+      tone: "bg-green-700 text-white",
+      note: "Marks and feedback are with the students.",
+    },
+  ] as const;
+
+  /** Slide the bolt. Only the notch that shows students their marks asks first. */
+  async function moveTo(next: (typeof PHASES)[number]["id"]) {
+    if (next === phase) return;
+    if (next === "closed" && !confirm("Release the marks and feedback to students? You can slide this back afterwards.")) return;
+    const action =
+      next === "responding" ? "reopenResponses" : next === "reviewing" ? (released ? "unrelease" : "startMarking") : "release";
+    await post({ action }, `phase-${next}`);
+    await load();
+  }
+
   return (
     <main className="mx-auto w-full max-w-4xl px-6 py-10">
       <Link href={`/teacher/quiz/${id}`} className="text-sm text-slate-500 hover:text-slate-800">← {data.quiz.title}</Link>
@@ -730,63 +844,109 @@ export default function MarkPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => {
-              const next = view === "question" ? "student" : "question";
-              setView(next);
-              // The package follows the view, because a teacher who has just
-              // switched to one student almost never wants a question package.
-              // "Whole quiz" is a deliberate choice and survives the switch.
-              if (pkgScope !== "batch") setPkgScope(next);
-            }}
-            className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200"
-          >
-            {view === "question" ? "Per student" : "Question by question"}
-          </button>
-          {!released ? (
-            <button
-              onClick={async () => {
-                if (!confirm("Release the marks and feedback to students? You can withdraw them again afterwards.")) return;
-                await post({ action: "release" }, "release");
-                await load();
-              }}
-              disabled={!!busy}
-              className="rounded-lg bg-green-700 px-4 py-2 text-sm font-semibold text-white hover:bg-green-800 disabled:opacity-50"
-            >
-              {busy === "release" ? "Releasing…" : "Release results"}
-            </button>
-          ) : (
-            <button
-              onClick={async () => {
-                await post({ action: "unrelease" }, "unrelease");
-                await load();
-              }}
-              disabled={!!busy}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-            >
-              Withdraw results
-            </button>
-          )}
+          {/*
+            * Two segments rather than one button. A single toggle labelled with
+            * its destination ("Per student") reads equally as a label for where
+            * you already are, and the page had no other way of saying which
+            * view was live — the question tabs and the student tabs look alike.
+            */}
+          <div className="flex rounded-lg border border-slate-300 bg-white p-0.5" role="group" aria-label="Marking view">
+            {(
+              [
+                ["question", "By question"],
+                ["student", "By student"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => {
+                  setView(id);
+                  // The package follows the view: a teacher who has just moved
+                  // to one student almost never wants a question package. Whole
+                  // quiz is a deliberate choice and survives the switch.
+                  if (pkgScope !== "batch") setPkgScope(id);
+                }}
+                aria-pressed={view === id}
+                className={`rounded-md px-3.5 py-1.5 text-sm font-semibold ${
+                  view === id ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      <p className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500">
-        {released
-          ? `Marks are released — students can see them at /q/${data.quiz.slug}/result. Any change you save from here reaches them at once.`
-          : "Students see “response recorded” until you release. Releasing is always your click, whether you marked every answer yourself, edited AI suggestions, or left them as they came."}
-      </p>
+      {/*
+        * The bolt.
+        *
+        * A quiz is always in exactly one of three states, and until now the
+        * screen showed only the one transition out of the state you were in —
+        * a green "Release results" button, or a grey "Withdraw" one. Which of
+        * the three you were actually in had to be inferred from which button
+        * happened to be on screen, and two of the transitions the API supports
+        * had no control at all.
+        *
+        * A door bolt says all of it at once: three notches, the bolt sitting in
+        * one of them, and sliding it is the action. Releasing is still a
+        * deliberate click and still asks first, because it is the notch that
+        * puts marks in front of students.
+        */}
+      <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Quiz is</span>
+          <div className="flex flex-1 min-w-[18rem] rounded-lg bg-slate-100 p-1" role="group" aria-label="Quiz phase">
+            {PHASES.map((p) => {
+              const here = phase === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => moveTo(p.id)}
+                  disabled={!!busy || here}
+                  aria-current={here ? "step" : undefined}
+                  title={p.note}
+                  className={`flex-1 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    here
+                      ? `${p.tone} shadow-sm`
+                      : "text-slate-500 hover:bg-white hover:text-slate-800 disabled:opacity-50"
+                  }`}
+                >
+                  {busy === `phase-${p.id}` ? "…" : p.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          {released
+            ? `Students can see their marks at /q/${data.quiz.slug}/result. Anything you save from here reaches them at once.`
+            : PHASES.find((p) => p.id === phase)?.note}
+        </p>
+      </div>
       {note && <p className="mt-2 text-sm font-medium text-green-700">{note}</p>}
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
 
       {view === "question" ? (
         <>
-          <div className="mt-6 flex flex-wrap gap-2">
+          {/*
+            * Index tabs on a register: the live tab sits on the same baseline
+            * as the panel below it and the others sit behind. Two strips on
+            * this page look alike (questions here, names in the other view),
+            * so the tab that is open needs to read as attached to what it
+            * opened, not merely as a darker pill.
+            */}
+          <div className="mt-6 flex flex-wrap items-end gap-1 border-b border-slate-300">
             {data.questions.map((qn, i) => (
               <button
                 key={qn.id}
                 onClick={() => setQIndex(i)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
-                  i === qIndex ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                aria-current={i === qIndex ? "page" : undefined}
+                title={qn.text}
+                className={`-mb-px rounded-t-lg border border-b-0 px-4 py-2 text-xs font-semibold ${
+                  i === qIndex
+                    ? "border-slate-300 bg-white text-slate-900"
+                    : "border-transparent bg-slate-100 text-slate-500 hover:bg-slate-200"
                 }`}
               >
                 Q{i + 1}
@@ -845,18 +1005,27 @@ export default function MarkPage() {
         </>
       ) : (
         <>
-          <div className="mt-6 flex flex-wrap gap-2">
-            {data.attempts.map((a, i) => (
-              <button
-                key={a.id}
-                onClick={() => setSIndex(i)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
-                  i === sIndex ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
-              >
-                {a.name}
-              </button>
-            ))}
+          <div className="mt-6 flex flex-wrap items-end gap-1 border-b border-slate-300">
+            {data.attempts.map((a, i) => {
+              // A tick beside a name means every written answer of theirs is
+              // marked — the register's own way of showing who is done.
+              const done = data.questions.every((qn) => !!a.marking?.[qn.id]?.teacher || !(a.answers[qn.id] ?? "").trim());
+              return (
+                <button
+                  key={a.id}
+                  onClick={() => setSIndex(i)}
+                  aria-current={i === sIndex ? "page" : undefined}
+                  className={`-mb-px flex items-center gap-1.5 rounded-t-lg border border-b-0 px-4 py-2 text-xs font-semibold ${
+                    i === sIndex
+                      ? "border-slate-300 bg-white text-slate-900"
+                      : "border-transparent bg-slate-100 text-slate-500 hover:bg-slate-200"
+                  }`}
+                >
+                  {a.name}
+                  {done && <span className="text-green-600" title="Every answer inked">✓</span>}
+                </button>
+              );
+            })}
           </div>
           {attempt && writtenTotal && (
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
