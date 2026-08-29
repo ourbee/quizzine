@@ -135,6 +135,27 @@ function GrowthSpark({ telemetry }: { telemetry?: QuestionTelemetry }) {
   );
 }
 
+/*
+ * Pencil and pen.
+ *
+ * Drawn rather than set as emoji: an emoji renders differently on every
+ * platform, ignores the colour of the text it sits in, and reads as decoration
+ * on a screen where a teacher is deciding a mark. These inherit currentColor,
+ * so the chip stays one object.
+ */
+const PencilMark = () => (
+  <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M11.5 2.5l2 2L5 13l-3 1 1-3z" />
+    <path d="M10 4l2 2" />
+  </svg>
+);
+
+const PenMark = () => (
+  <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden fill="currentColor">
+    <path d="M12.9 1.9a1.4 1.4 0 0 1 2 2L6.4 12.4 2.6 13.7l1.3-3.8z" />
+  </svg>
+);
+
 export default function MarkPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -440,15 +461,20 @@ export default function MarkPage() {
             <p className="font-semibold text-slate-900">{heading}</p>
             {inPencil && (
               <span
-                className="rounded-full border border-dashed border-violet-400 px-2 py-0.5 text-[11px] font-medium italic text-violet-700"
-                title="A chatbot wrote this. It is not your mark until you save it."
+                className="inline-flex items-center gap-1 rounded-full border border-dashed border-violet-400 px-2 py-0.5 text-[11px] font-medium italic text-violet-700"
+                title="A chatbot suggested this. It is not your mark until you ink it in, and students never see it."
               >
-                in pencil
+                <PencilMark />
+                in pencil — a chatbot&apos;s
               </span>
             )}
             {inked && (
-              <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[11px] font-medium text-white" title="Your mark, saved.">
-                inked
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-slate-900 px-2 py-0.5 text-[11px] font-medium text-white"
+                title="Your mark, saved."
+              >
+                <PenMark />
+                inked — yours
               </span>
             )}
           </div>
@@ -614,24 +640,40 @@ export default function MarkPage() {
     return data.attempts.reduce((n, a) => n + data.questions.filter((qn) => typed(a.id, qn.id)).length, 0);
   };
 
-  const unitChoice: { id: PackScope; label: string; note: string } =
+  /*
+   * Both options name both axes, always.
+   *
+   * "Aarti Sen" beside "Whole quiz" reads as a choice between one student and
+   * all of that student's questions — which is not what the second one means.
+   * The ambiguity is inherent to naming only the axis that varies, so neither
+   * label does that any more: each says how many students and how many
+   * questions it covers, and the counts sit underneath.
+   */
+  const nStudents = data.attempts.length;
+  const nQuestions = data.questions.length;
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  const unitChoice: { id: PackScope; label: string; covers: string; note: string } =
     view === "question"
       ? {
           id: "question",
-          label: question ? `Q${qIndex + 1}` : "This question",
+          label: question ? `Q${qIndex + 1} only` : "This question",
+          covers: `1 question × ${plural(nStudents, "student")}`,
           note: "Every answer to the question on screen. Marks most consistently — one question held in mind, the class graded against itself.",
         }
       : {
           id: "student",
-          label: attempt ? attempt.name : "This student",
+          label: attempt ? `${attempt.name} only` : "This student",
+          covers: `1 student × ${plural(nQuestions, "question")}`,
           note: "One student's answers to every written question. What you want when you are working through a pile person by person.",
         };
-  const scopeChoices: { id: PackScope; label: string; note: string; count: number }[] = [
+  const scopeChoices: { id: PackScope; label: string; covers: string; note: string; count: number }[] = [
     { ...unitChoice, count: countFor(unitChoice.id) },
     {
       id: "batch",
-      label: "Whole quiz",
-      note: "Every answer to every question, in the fewest round trips. Grouped question by question, but the model's attention is spread thinnest here — read what comes back.",
+      label: "Everything",
+      covers: `${plural(nStudents, "student")} × ${plural(nQuestions, "question")}`,
+      note: "Every answer by every student, in the fewest round trips. Grouped question by question, but the model's attention is spread thinnest here — read what comes back.",
       count: countFor("batch"),
     },
   ];
@@ -669,7 +711,10 @@ export default function MarkPage() {
                   >
                     <span className="block text-xs font-bold">{choice.label}</span>
                     <span className={`block text-[11px] ${on ? "text-violet-200" : "text-slate-500"}`}>
-                      {choice.count} answer{choice.count === 1 ? "" : "s"}
+                      {choice.covers}
+                    </span>
+                    <span className={`mt-0.5 block text-[11px] font-semibold ${on ? "text-white" : "text-violet-800"}`}>
+                      {choice.count} answer{choice.count === 1 ? "" : "s"} to send
                     </span>
                   </button>
                 );

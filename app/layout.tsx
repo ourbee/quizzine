@@ -6,6 +6,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import JumpNav from "@/components/JumpNav";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -56,6 +57,8 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <div className="flex-1 flex flex-col">{children}</div>
+        {/* Every long screen gets a lift; it hides itself on the short ones. */}
+        <JumpNav />
         <footer className="no-print text-center text-xs text-slate-500 py-4 border-t border-slate-200 bg-white/70">
           <p>
             Created by{" "}
