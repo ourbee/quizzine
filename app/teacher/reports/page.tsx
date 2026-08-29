@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import TeacherBar from "@/components/TeacherBar";
 import * as XLSX from "xlsx";
 import { NO_SEMESTER } from "@/lib/normalize";
 import {
@@ -379,9 +380,9 @@ export default function ReportsPage() {
 
   return (
     <main className="max-w-6xl mx-auto px-6 py-10 w-full">
-      <Link href="/teacher" className="text-sm text-slate-500 hover:text-slate-800 print:hidden">
-        ← Dashboard
-      </Link>
+      <div className="print:hidden">
+        <TeacherBar />
+      </div>
       <div className="mt-2 flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Reports</h1>

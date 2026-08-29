@@ -7,6 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import TeacherBar from "@/components/TeacherBar";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import { parseJsonText, parsePastedText, parseWorkbookSheets } from "@/lib/parsers";

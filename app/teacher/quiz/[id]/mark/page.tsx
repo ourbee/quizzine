@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import TeacherBar from "@/components/TeacherBar";
 import { awardedFor, scorePercent, type RubricConfig } from "@/lib/rubric";
 import { scoreLabel } from "@/lib/score";
 import { buildPackage, parseAiReply, remainderPackage, type PackInput, type PackScope } from "@/lib/markpack";
@@ -920,8 +921,8 @@ export default function MarkPage() {
 
   return (
     <main className="mx-auto w-full max-w-4xl px-6 py-10">
-      <Link href={`/teacher/quiz/${id}`} className="text-sm text-slate-500 hover:text-slate-800">← {data.quiz.title}</Link>
-      <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
+      <TeacherBar back={{ href: `/teacher/quiz/${id}`, label: `← ${data.quiz.title}` }} />
+      <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Marking</h1>
           <p className="mt-0.5 text-sm text-slate-500">

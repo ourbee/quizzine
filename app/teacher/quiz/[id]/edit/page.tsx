@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import TeacherBar from "@/components/TeacherBar";
 import * as XLSX from "xlsx";
 import {
   allotmentCoverage,
@@ -339,14 +340,12 @@ export default function EditQuizPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <TeacherBar back={{ href: `/teacher/quiz/${id}`, label: "← Back to results" }} />
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <div>
           <Logo />
           <h1 className="mt-2 text-2xl font-bold text-slate-900">Edit quiz</h1>
         </div>
-        <Link href={`/teacher/quiz/${id}`} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">
-          Back to results
-        </Link>
       </div>
 
       {/* Repeated top and bottom so a long paper never has to be scrolled to save. */}

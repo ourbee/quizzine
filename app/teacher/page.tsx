@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Logo from "@/components/Logo";
+import TeacherBar from "@/components/TeacherBar";
 
 interface QuizRow {
   id: string;
@@ -123,12 +124,6 @@ export default function TeacherPage() {
     load();
   }
 
-  async function signOut() {
-    await fetch("/api/auth", { method: "DELETE" });
-    setQuizzes([]);
-    setOwner("");
-    setState("login");
-  }
 
   if (state === "loading") {
     return <main className="max-w-3xl mx-auto px-6 py-20 text-center text-slate-500">Loading…</main>;
@@ -173,15 +168,12 @@ export default function TeacherPage() {
 
   return (
     <main className="max-w-4xl mx-auto px-6 py-12 w-full">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <TeacherBar back={null} owner={owner} />
+      <div className="mt-3 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Your quizzes</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            {owner && <span className="mr-2">{owner} ·</span>}
             {quizzes.length === 0 ? "Nothing here yet — create your first quiz." : `${quizzes.length} quiz${quizzes.length === 1 ? "" : "zes"}`}
-            <button onClick={signOut} className="ml-2 underline underline-offset-2 hover:text-slate-800">
-              Sign out
-            </button>
           </p>
         </div>
         <div className="flex items-center gap-2">

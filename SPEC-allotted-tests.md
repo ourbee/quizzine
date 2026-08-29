@@ -1,8 +1,29 @@
 # SPEC — Allotted tests (one student, one question)
 
-Status: **planned, not built** (agreed 2026-08-30). Build starts when Ritwik says so.
-Companion fixes bundled at the end: the dashboard sign-out button (§8) and a
-redesign of the `/teacher/new` intake step, which Ritwik finds confusing (§9).
+Status: **built and shipped, 2026-08-30**, in five commits following §10's build
+order. Companion fixes bundled: a sign-out button on every teacher page (§8) and
+a redesign of the `/teacher/new` intake step (§9).
+
+**What changed against this spec while building.** Recorded here because the
+code is the authority now and the differences are the interesting part:
+
+- **The quiz is born closed, not merely blocked from opening.** `POST
+  /api/quizzes` sets `accepting = false` for an allotted quiz, so the window
+  between publishing and attaching a roster is never one where a student can
+  arrive to find nothing waiting. An edit that orphans a roll closes the quiz
+  again and says so.
+- **`/api/attempts/lookup` was not built.** The start route took the whole job:
+  it verifies the roll, deals the hand, stores it on the attempt and returns
+  the sanitized questions in one call — the two-step form is a client concern,
+  and a second endpoint would have been a second place to get the gating wrong.
+  `GET /api/attempts/allotted` exists instead, for recovering a hand after a
+  reload, mirroring the MST stage route.
+- **The marking screen needed more than a default view.** Both views filter to
+  the cells that exist, a student's total is computed over their own hand, and
+  the package scope labels describe the allotted shape ("4 students, each with
+  their own question") rather than a grid that is mostly empty.
+- **The intake redesign kept a paste box in the upload card**, reached by an
+  "or paste it as text instead" link, exactly as §9b's closing note allowed.
 
 ---
 

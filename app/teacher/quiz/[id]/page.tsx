@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import TeacherBar from "@/components/TeacherBar";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import { correctKeysOf, isChoice, isGraded, isSurvey, splitKeys } from "@/lib/questions";
@@ -239,8 +240,8 @@ export default function QuizDetailPage() {
 
   return (
     <main className="max-w-4xl mx-auto px-6 py-10 w-full">
-      <Link href="/teacher" className="text-sm text-slate-500 hover:text-slate-800">← Dashboard</Link>
-      <div className="mt-2 flex items-start justify-between gap-4 flex-wrap">
+      <TeacherBar />
+      <div className="mt-3 flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">{quiz.title}</h1>
           <p className="text-sm text-slate-500 mt-0.5">

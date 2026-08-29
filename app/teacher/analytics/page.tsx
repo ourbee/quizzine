@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import TeacherBar from "@/components/TeacherBar";
 import * as XLSX from "xlsx";
 import { groupByDimension, type AnalyticsResult, type StudentProfile, type StudentTagRow } from "@/lib/analytics";
 import { semesterLabel } from "@/lib/normalize";
@@ -226,7 +227,8 @@ export default function AnalyticsPage() {
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <TeacherBar />
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <div>
           <Logo />
           <h1 className="mt-2 text-2xl font-bold text-slate-900">Strengths and weaknesses</h1>
