@@ -64,8 +64,9 @@ export async function POST(req: NextRequest) {
     score: number | null;
     max_score: number | null;
     submitted_at: string;
+    allotted: string[] | null;
   }>(
-    `SELECT id, student, group_info, answers, per_question, marking, score, max_score, submitted_at
+    `SELECT id, student, group_info, answers, per_question, marking, score, max_score, submitted_at, allotted
        FROM attempts WHERE quiz_id = $1 AND status = 'submitted'`,
     [quiz.id]
   );
@@ -85,9 +86,17 @@ export async function POST(req: NextRequest) {
 
   const rubric = normalizeRubricConfig(quiz.settings.rubric);
   const marking = normalizeMarking(mine.marking);
-  const status = new Map(markingStatus(quiz.questions, mine.answers, marking).map((s) => [s.qid, s]));
+  // An allotted student gets back their own hand, never the bank — releasing
+  // the other questions would release their classmates' model answers too.
+  const paper =
+    quiz.settings.allotMode && mine.allotted?.length
+      ? mine.allotted
+          .map((qid) => quiz.questions.find((qn) => qn.id === qid))
+          .filter((qn): qn is Question => !!qn)
+      : quiz.questions;
+  const status = new Map(markingStatus(paper, mine.answers, marking).map((s) => [s.qid, s]));
 
-  const questions = quiz.questions.map((qn) => {
+  const questions = paper.map((qn) => {
     const written = !isChoice(qn) && isGraded(qn);
     const stored = mine.answers?.[qn.id] ?? "";
     const per = mine.per_question?.find((p) => p.qid === qn.id);

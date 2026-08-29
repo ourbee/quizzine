@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
     flags: AttemptFlags;
     answers: Record<string, string> | null;
     mst: MstState | null;
+    allotted: string[] | null;
   }>(`SELECT * FROM attempts WHERE id = $1`, [body.attemptId]);
   if (!attempts.length) return NextResponse.json({ error: "Attempt not found." }, { status: 404 });
   const attempt = attempts[0];
@@ -45,7 +46,15 @@ export async function POST(req: NextRequest) {
   // An adaptive paper is the questions this student was routed through, not the
   // bank they were drawn from: marking, the total and the review all work on it.
   const mstConfig = quiz.settings?.mstMode ? normalizeMstConfig(quiz.settings.mst) : null;
-  const questions = mstConfig ? servedQuestions(bank, attempt.mst, mstConfig) : bank;
+  // An allotted attempt is marked on the hand this student was dealt, exactly
+  // as an adaptive one is marked on the stages they were routed through.
+  const dealt =
+    quiz.settings?.allotMode && attempt.allotted?.length
+      ? attempt.allotted
+          .map((qid) => bank.find((qn) => qn.id === qid))
+          .filter((qn): qn is Question => !!qn)
+      : null;
+  const questions = dealt ?? (mstConfig ? servedQuestions(bank, attempt.mst, mstConfig) : bank);
   const rubricMode = quiz.settings?.gradingMode === "rubric";
   // A rubric-marked quiz shows "response recorded" at submission for the same
   // reason a peer-reviewed one does: the marks do not exist yet, and rubric
@@ -84,7 +93,12 @@ export async function POST(req: NextRequest) {
   // adaptive paper submits what the server already holds rather than trusting a
   // browser to send back stages it should no longer be able to change.
   const posted: Record<string, string> = body.answers && typeof body.answers === "object" ? body.answers : {};
-  const answers: Record<string, string> = mstConfig ? { ...posted, ...(attempt.answers ?? {}) } : posted;
+  let answers: Record<string, string> = mstConfig ? { ...posted, ...(attempt.answers ?? {}) } : posted;
+  // Answers to questions this student was never dealt are refused at the door.
+  if (dealt) {
+    const mine = new Set(dealt.map((qn) => qn.id));
+    answers = Object.fromEntries(Object.entries(answers).filter(([qid]) => mine.has(qid)));
+  }
   const settings = quiz.settings;
   const { per, score, max, pending } = grade(questions, answers, settings.multiScoring ?? "exact");
 

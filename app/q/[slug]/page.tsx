@@ -65,6 +65,9 @@ interface PublicQuiz {
   questionCount: number;
   totalPoints?: number;
   mst?: { stages: number; perStage: number };
+  /** Allotted test: each roll number is dealt its own question(s) by the server. */
+  allotted?: boolean;
+  allotSemester?: number;
   survey: boolean;
   peerReview: boolean;
   /** Marked by the teacher against a rubric and released; nothing scored on submit. */
@@ -135,6 +138,9 @@ export default function StudentQuizPage() {
   // Adaptive papers arrive one stage at a time from the server; the bank never
   // reaches the browser. See lib/mst.ts.
   const [stageQuestions, setStageQuestions] = useState<PublicQuestion[] | null>(null);
+  // Allotted tests: this student's own hand, dealt by the start route once
+  // their roll is verified. The bank never reaches the browser.
+  const [allottedQuestions, setAllottedQuestions] = useState<PublicQuestion[] | null>(null);
   const [stageNumber, setStageNumber] = useState(0);
   const [totalStages, setTotalStages] = useState(0);
   const [rechecking, setRechecking] = useState(false);
@@ -192,6 +198,26 @@ export default function StudentQuizPage() {
           setIndex(active.index ?? 0);
           if (savedAns) setAnswers(JSON.parse(savedAns));
           setProgress(parseProgress(localStorage.getItem(examKey(active.attemptId))));
+          // An allotted hand comes back from the server the same way a stage
+          // does, so a reload mid-attempt keeps the student on their question.
+          if (data.allotted) {
+            const res2 = await fetch(`/api/attempts/allotted?attemptId=${encodeURIComponent(active.attemptId)}`, {
+              cache: "no-store",
+            });
+            if (res2.ok) {
+              const s = await res2.json();
+              if (s.done) {
+                setPhase("intro");
+                localStorage.removeItem(activeKey);
+                return;
+              }
+              setAllottedQuestions(s.questions ?? []);
+            } else {
+              setPhase("intro");
+              localStorage.removeItem(activeKey);
+              return;
+            }
+          }
           // The stage a reload landed in comes back from the server rather than
           // from storage, so a cleared browser does not end the attempt.
           if (data.settings.mstMode) {
@@ -286,18 +312,21 @@ export default function StudentQuizPage() {
 
   const mstMode = !!quiz?.settings.mstMode;
 
+  const allotMode = !!quiz?.allotted;
+
   const ordered = useMemo(() => {
     if (!quiz || !attempt) return quiz?.questions ?? [];
     const seed = hashSeed(attempt.attemptId);
-    // The server has already chosen this stage and its order; reshuffling here
-    // would undo the routing that put these questions in front of this student.
-    let qs = mstMode ? (stageQuestions ?? []) : quiz.questions;
-    if (!mstMode && quiz.settings.shuffleQuestions) qs = shuffleWithinPassageGroups(qs, seed);
+    // The server has already chosen this stage — or dealt this hand — and its
+    // order; reshuffling here would undo the choice that put these questions in
+    // front of this student.
+    let qs = allotMode ? (allottedQuestions ?? []) : mstMode ? (stageQuestions ?? []) : quiz.questions;
+    if (!mstMode && !allotMode && quiz.settings.shuffleQuestions) qs = shuffleWithinPassageGroups(qs, seed);
     if (quiz.settings.shuffleOptions) {
       qs = qs.map((qn, i) => ({ ...qn, options: seededShuffle(qn.options, seed + i + 1) }));
     }
     return qs;
-  }, [quiz, attempt, mstMode, stageQuestions]);
+  }, [quiz, attempt, mstMode, stageQuestions, allotMode, allottedQuestions]);
 
   // Landing on a question is what turns its palette tile from grey to red — the
   // student has now seen it and chosen to leave it, which is different from
@@ -444,7 +473,10 @@ export default function StudentQuizPage() {
     setStartError("");
     const payload = quiz.settings.groupMode
       ? { slug, group: { name: groupName, semester, members } }
-      : { slug, name, roll, semester };
+      : // The roster fixes an allotted test's semester; the server ignores any sent.
+        quiz.allotted
+        ? { slug, name, roll }
+        : { slug, name, roll, semester };
     const res = await fetch("/api/attempts/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -468,6 +500,9 @@ export default function StudentQuizPage() {
     setAnswers({});
     setProgress(emptyProgress());
     setIndex(0);
+    if (data.allotted) {
+      setAllottedQuestions(data.allotted.questions ?? []);
+    }
     if (data.mst) {
       setStageQuestions(data.mst.questions ?? []);
       setStageNumber(data.mst.stage ?? 0);
@@ -802,7 +837,8 @@ export default function StudentQuizPage() {
             <Media url={quiz.introMedia} />
             <ul className="mt-4 text-sm space-y-1" style={{ color: theme.muted }}>
               <li>
-                • {quiz.questionCount} questions
+                • {quiz.questionCount} question{quiz.questionCount === 1 ? "" : "s"}
+                {quiz.allotted ? " — allotted to your roll number, so yours may differ from your neighbour's" : ""}
                 {quiz.peerReview
                   ? " · marked by your classmates"
                   : quiz.rubricMode
@@ -819,7 +855,7 @@ export default function StudentQuizPage() {
                   Nothing is scored as you answer; your marks appear when your teacher releases them.
                 </li>
               )}
-              {quiz.questions.some((qn) => qn.type === "short" || qn.type === "essay") && (
+              {(quiz.questions.some((qn) => qn.type === "short" || qn.type === "essay") || quiz.allotted) && (
                 <>
                   {quiz.questions.some((qn) => !!qn.wordLimit) && (
                     <li>• Some answers have a word limit. The counter warns you; going over is marked down, not blocked.</li>
@@ -853,9 +889,12 @@ export default function StudentQuizPage() {
               <li>
                 {quiz.peerReview
                   ? "• When your teacher opens the review round, this same link takes you to your classmates' work"
-                  : quiz.survey
-                    ? "• You can print or save a copy of your responses after submitting"
-                    : "• Your score and feedback appear immediately after you submit"}
+                  : quiz.rubricMode
+                    ? // Said once, plainly: the bullet above already explains why.
+                      "• Come back to this link once your teacher releases the marking"
+                    : quiz.survey
+                      ? "• You can print or save a copy of your responses after submitting"
+                      : "• Your score and feedback appear immediately after you submit"}
               </li>
             </ul>
 
@@ -1016,14 +1055,18 @@ export default function StudentQuizPage() {
                   </>
                 ) : (
                   <>
-                    <input
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="Full name"
-                      required
-                      className="w-full rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
-                      style={{ borderColor: theme.border }}
-                    />
+                    {/* An allotted test leads with the roll — it is what finds
+                        the question — while an ordinary quiz keeps name first. */}
+                    {!quiz.allotted && (
+                      <input
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Full name"
+                        required
+                        className="w-full rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
+                        style={{ borderColor: theme.border }}
+                      />
+                    )}
                     <div className="flex gap-3">
                       <input
                         value={roll}
@@ -1033,23 +1076,44 @@ export default function StudentQuizPage() {
                         pattern="[0-9]+"
                         title="Digits only"
                         required
+                        autoFocus={!!quiz.allotted}
                         className="flex-1 rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
                         style={{ borderColor: theme.border }}
                       />
-                      <select
-                        value={semester}
-                        onChange={(e) => setSemester(e.target.value)}
-                        required
-                        className="rounded-lg border px-3 py-2.5 bg-white text-slate-900"
-                        style={{ borderColor: theme.border }}
-                      >
-                        <option value="">Semester</option>
-                        {SEMESTER_CHOICES.map((n) => (
-                          <option key={n} value={n}>Sem {n}</option>
-                        ))}
-                        <option value={NO_SEMESTER}>Not applicable</option>
-                      </select>
+                      {quiz.allotted ? (
+                        // The roster fixes the semester — shown, never chosen.
+                        <span
+                          className="flex items-center rounded-lg border px-4 py-2.5 text-sm font-semibold"
+                          style={{ borderColor: theme.border, color: theme.muted }}
+                        >
+                          {quiz.allotSemester !== undefined ? semesterLabel(quiz.allotSemester) : "Semester set by your teacher"}
+                        </span>
+                      ) : (
+                        <select
+                          value={semester}
+                          onChange={(e) => setSemester(e.target.value)}
+                          required
+                          className="rounded-lg border px-3 py-2.5 bg-white text-slate-900"
+                          style={{ borderColor: theme.border }}
+                        >
+                          <option value="">Semester</option>
+                          {SEMESTER_CHOICES.map((n) => (
+                            <option key={n} value={n}>Sem {n}</option>
+                          ))}
+                          <option value={NO_SEMESTER}>Not applicable</option>
+                        </select>
+                      )}
                     </div>
+                    {quiz.allotted && (
+                      <input
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Full name"
+                        required
+                        className="w-full rounded-lg border px-4 py-2.5 bg-white text-slate-900 focus:outline-none focus:ring-2"
+                        style={{ borderColor: theme.border }}
+                      />
+                    )}
                   </>
                 )}
                 {/*
@@ -1063,7 +1127,7 @@ export default function StudentQuizPage() {
                 </p>
                 {startError && <p className="text-sm text-red-600">{startError}</p>}
                 <button type="submit" disabled={starting} className="w-full rounded-lg py-3 font-semibold disabled:opacity-50" style={accentBtn}>
-                  {starting ? "Starting…" : "Start quiz"}
+                  {starting ? "Starting…" : quiz.allotted ? "Find my question & start" : "Start quiz"}
                 </button>
               </form>
             )}

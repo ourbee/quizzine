@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { q } from "@/lib/db";
+import { normalizeAllotment } from "@/lib/allot";
 import { normalizeMstConfig } from "@/lib/mst";
 import { isGraded, isSurvey, maxPoints } from "@/lib/questions";
 import type { Question, QuizSettings } from "@/lib/types";
@@ -38,6 +39,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
   // leaves it — a student who could fetch all hundred questions would be reading
   // the ones they have not been routed to yet.
   const mst = settings.mstMode ? normalizeMstConfig(settings.mst) : null;
+  // An allotted test's bank must not leave the server either: a student's
+  // question(s) arrive from the start route once their roll is verified. Only
+  // the semester and how many questions they will sit are safe to say here.
+  const allot = settings.allotMode
+    ? normalizeAllotment((quiz as unknown as { allotment?: unknown }).allotment)
+    : null;
   // Whether a question is scored is safe to reveal; which option is right is not.
   const sanitized = questions.map((qn) => ({
     id: qn.id,
@@ -74,9 +81,16 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
       pasteGuard: !!settings.pasteGuard,
       hardWordLimit: !!settings.hardWordLimit,
     },
-    questionCount: mst ? Math.min(questions.length, mst.stages * mst.perStage) : questions.length,
-    totalPoints: mst ? undefined : maxPoints(questions),
+    questionCount:
+      settings.allotMode
+        ? (allot?.perStudent ?? 1)
+        : mst
+          ? Math.min(questions.length, mst.stages * mst.perStage)
+          : questions.length,
+    totalPoints: mst || settings.allotMode ? undefined : maxPoints(questions),
     mst: mst ? { stages: mst.stages, perStage: mst.perStage } : undefined,
+    allotted: settings.allotMode ? true : undefined,
+    allotSemester: allot?.semester,
     survey: settings.gradingMode === "survey" || isSurvey(questions),
     peerReview: settings.gradingMode === "peer",
     // Nothing is marked as the student answers; the teacher marks against the
@@ -86,6 +100,6 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
     rubricMode: settings.gradingMode === "rubric",
     phase,
     closed,
-    questions: closed || mst ? [] : sanitized,
+    questions: closed || mst || settings.allotMode ? [] : sanitized,
   });
 }
