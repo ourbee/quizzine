@@ -114,6 +114,13 @@ CREATE TABLE IF NOT EXISTS quiz_shares (
 );
 CREATE INDEX IF NOT EXISTS quiz_shares_source_idx ON quiz_shares(source_quiz_id);
 
+-- Allotted tests: the roster and the roll → question map. Teacher-private, so
+-- its own column, never a settings field — settings partially reach students.
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS allotment jsonb;
+-- Which questions this attempt was dealt (like mst: the server deals, the
+-- student only ever receives their share). Null for every ordinary quiz.
+ALTER TABLE attempts ADD COLUMN IF NOT EXISTS allotted jsonb;
+
 CREATE TABLE IF NOT EXISTS teacher_invites (
   email text PRIMARY KEY,
   invited_by text NOT NULL,

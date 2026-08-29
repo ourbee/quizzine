@@ -102,6 +102,16 @@ export interface QuizSettings {
    */
   mstMode?: boolean;
   mst?: MstConfig;
+  /**
+   * Every student on the roster gets their own question(s), dealt by roll
+   * number — a different question, not a different shuffle. The roster and
+   * the map live in the quiz's own `allotment` column (see lib/allot.ts),
+   * never here: settings partially reach the browser through the public
+   * route. Absent means off. Never combined with mstMode, groupMode or peer
+   * grading. The bank is dealt from the server, MST-style — the public route
+   * sends no questions at all while this is on.
+   */
+  allotMode?: boolean;
   closesAt?: string; // ISO datetime; stop accepting new starts
   allowMultiple: boolean;
   groupMode?: boolean; // one submission per group instead of per student
