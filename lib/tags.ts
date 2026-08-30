@@ -364,6 +364,16 @@ export interface TagVariantGroup {
   merge: string[];
   /** How many questions carry each spelling, keyed by the stored tag. */
   counts: Record<string, number>;
+  /**
+   * True when every spelling in the group differs only in case, spacing,
+   * punctuation or a trailing plural — a difference no one meant to make.
+   * False when the group was formed by a near-miss instead, where the words
+   * themselves differ and only a teacher can say whether they are one tag.
+   *
+   * The distinction is what lets the merge queue clear the mechanical groups in
+   * one click and still ask about "Edward Said" versus "Edward W. Said".
+   */
+  mechanical: boolean;
 }
 
 /**
@@ -401,16 +411,20 @@ export function tagVariants(counts: Record<string, number>): TagVariantGroup[] {
       merged.set(b, resolveTarget(a, merged));
     }
   }
+  // Which surviving keys absorbed a near-miss: those groups are judgements, the
+  // rest are pure spelling drift. See TagVariantGroup.mechanical.
+  const absorbed = new Set<string>();
   for (const [from, to] of merged) {
     const source = groups.get(from);
     const target = groups.get(to);
     if (!source || !target) continue;
     groups.set(to, [...target, ...source]);
     groups.delete(from);
+    absorbed.add(to);
   }
 
   const out: TagVariantGroup[] = [];
-  for (const group of groups.values()) {
+  for (const [key, group] of groups) {
     // Collapse to one row per distinct stored spelling.
     const byTag = new Map<string, number>();
     for (const e of group) byTag.set(e.tag, (byTag.get(e.tag) ?? 0) + e.n);
@@ -420,6 +434,7 @@ export function tagVariants(counts: Record<string, number>): TagVariantGroup[] {
       keep: sorted[0][0],
       merge: sorted.slice(1).map(([tag]) => tag),
       counts: Object.fromEntries(sorted),
+      mechanical: !absorbed.has(key),
     });
   }
   return out.sort((a, b) => a.keep.localeCompare(b.keep));
@@ -483,49 +498,149 @@ export function applyTagMerges(tags: string[], merges: Record<string, string>): 
  * "Unit 7 Cultural Studies" arriving beside an established "Unit 7 Cultural
  * studies" is quietly adopted into it rather than founding a second bucket.
  *
- * This kills every pure case, spacing and punctuation split at ingest. What it
- * deliberately does not do is merge wording variants — "Unit 9 Literary theory
- * post World War II" against "Unit 9 Literary Theory (Post World War II)" is a
- * judgement, not a normalisation, so it is surfaced as a suggestion instead
- * (`tagNearMisses`) and only a teacher's click applies it.
+ * It matches at two strengths. An exact bucket match — casefolded, whitespace
+ * collapsed — and a loose one, where the words agree once punctuation and a
+ * trailing plural are dropped. Both are adopted silently, because neither is a
+ * decision: "I.A. Richards" beside an established "I. A. Richards" is a typing
+ * habit. Nine variant groups observed in the wild, eight of them exactly this.
+ *
+ * What it does NOT fold is a near miss — a typo, or words that differ outright.
+ * "Edward Said" against "Edward W. Said" is a judgement no key can make, so it
+ * is surfaced as a suggestion (`tagNearMisses`) and waits for a click. Keeping
+ * that queue down to the cases that deserve it is the point: a queue where
+ * eight cards in nine are noise trains a teacher to ignore the ninth.
  */
 export interface TagVocabulary {
   /** bucket key → the exact spelling already in use. */
   byKey: Map<string, string>;
-  /** looser key (punctuation and plurals dropped) → the exact spellings using it. */
-  byLoose: Map<string, string[]>;
+  /**
+   * Looser key (punctuation and plurals dropped) → the ONE spelling that owns
+   * that bucket. Single by construction: the first spelling offered wins it and
+   * later rivals are ignored, which is what makes adopting it unambiguous.
+   */
+  byLoose: Map<string, string>;
   tags: string[];
 }
 
+/**
+ * Build a vocabulary from spellings offered in PRIORITY ORDER — the first
+ * spelling to claim a loose bucket owns it, and every later rival for that same
+ * bucket is dropped rather than recorded beside it.
+ *
+ * That ordering is the whole policy. Callers feed it the teacher's own majority
+ * spellings first (established usage outranks everything, because rewriting two
+ * hundred existing questions to match a preset would create the split it was
+ * meant to prevent), then a preset's spellings to fill the buckets the teacher
+ * has never used.
+ */
 export function buildVocabulary(tags: Iterable<string>): TagVocabulary {
-  const byKey = new Map<string, string>();
-  const byLoose = new Map<string, string[]>();
-  const list: string[] = [];
+  const vocab: TagVocabulary = { byKey: new Map(), byLoose: new Map(), tags: [] };
+  learnTags(vocab, tags);
+  return vocab;
+}
+
+/** Add spellings to a vocabulary without ever displacing one already there. */
+export function learnTags(vocab: TagVocabulary, tags: Iterable<string>): void {
   for (const raw of tags) {
     const parsed = parseTag(String(raw ?? ""));
     if (!parsed) continue;
     const stored = formatTag(parsed);
     const key = tagKey(parsed);
-    if (!byKey.has(key)) {
-      byKey.set(key, stored);
-      list.push(stored);
-    }
     const loose = looseKey(parsed);
-    const existing = byLoose.get(loose) ?? [];
-    if (!existing.includes(byKey.get(key)!)) byLoose.set(loose, [...existing, byKey.get(key)!]);
+    if (vocab.byKey.has(key) || vocab.byLoose.has(loose)) continue;
+    vocab.byKey.set(key, stored);
+    vocab.byLoose.set(loose, stored);
+    vocab.tags.push(stored);
   }
-  return { byKey, byLoose, tags: list };
 }
 
-/** Rewrite a question's tags into the vocabulary's own spellings where they match. */
+/** How many times each exact spelling appears. */
+export function countTags(tags: Iterable<string>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const raw of tags) {
+    const parsed = parseTag(String(raw ?? ""));
+    if (!parsed) continue;
+    const stored = formatTag(parsed);
+    counts[stored] = (counts[stored] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * One spelling per loose bucket: the one used on the most questions, ties
+ * broken alphabetically so the answer never depends on iteration order.
+ *
+ * This is what a vocabulary should be built from, and what the AI prompt should
+ * list. Handing a model every spelling in use — drift included — under a
+ * heading that says "copy these character for character" teaches it the drift.
+ */
+export function preferredSpellings(counts: Record<string, number>): string[] {
+  const best = new Map<string, { tag: string; n: number }>();
+  for (const [raw, n] of Object.entries(counts)) {
+    const parsed = parseTag(raw);
+    if (!parsed) continue;
+    const stored = formatTag(parsed);
+    const key = looseKey(parsed);
+    const current = best.get(key);
+    // Ties break on a plain code-unit comparison rather than localeCompare: it
+    // is stable across platforms, and it happens to prefer the spelling with
+    // the capital, which is the house form for the first word of a value.
+    if (!current || n > current.n || (n === current.n && stored < current.tag)) {
+      best.set(key, { tag: stored, n });
+    }
+  }
+  return [...best.values()].sort((a, b) => b.n - a.n || (a.tag < b.tag ? -1 : 1)).map((e) => e.tag);
+}
+
+/** The vocabulary a set of already-stored tags implies: majority spelling wins. */
+export function vocabularyInUse(tags: Iterable<string>): TagVocabulary {
+  return buildVocabulary(preferredSpellings(countTags(tags)));
+}
+
+/**
+ * Rewrite a question's tags into the vocabulary's own spellings.
+ *
+ * Two strengths of match are adopted. An exact bucket match (case and spacing
+ * ignored) is not a decision at all. A loose match — the same words once
+ * punctuation and a trailing plural are dropped — is adopted too, because
+ * "I.A. Richards" beside an established "I. A. Richards" is a typing habit, not
+ * a judgement, and asking about it buries the one case a year that is.
+ *
+ * What is NOT adopted here is a near miss: words that differ by a typo or by a
+ * whole word. Those go to `tagNearMisses` for a click.
+ */
 export function canonicalizeTags(tags: string[], vocab: TagVocabulary): string[] {
   return normalizeTags(
     tags.map((t) => {
       const parsed = parseTag(t);
       if (!parsed) return t;
-      return vocab.byKey.get(tagKey(parsed)) ?? t;
+      return vocab.byKey.get(tagKey(parsed)) ?? vocab.byLoose.get(looseKey(parsed)) ?? t;
     })
   );
+}
+
+/**
+ * Canonicalise a whole file at once, so it agrees with ITSELF as well as with
+ * the teacher's vocabulary.
+ *
+ * The gap this closes: canonicalising question by question against a vocabulary
+ * built before the file arrived cannot help a file that contains both spellings
+ * and neither was in use before. Forty questions carrying "Cultural studies"
+ * and "Cultural Studies" founded two buckets in one upload, and every count on
+ * the report was half what it should have been.
+ *
+ * The batch's own MAJORITY spelling founds any bucket the teacher has not
+ * already established — majority rather than first-seen, so the result does not
+ * depend on which question happens to come first in the sheet.
+ */
+export function canonicalizeBatch(lists: string[][], vocab: TagVocabulary): string[][] {
+  const working: TagVocabulary = {
+    byKey: new Map(vocab.byKey),
+    byLoose: new Map(vocab.byLoose),
+    tags: [...vocab.tags],
+  };
+  learnTags(working, preferredSpellings(countTags(lists.flat())));
+  return lists.map((list) => canonicalizeTags(list, working));
 }
 
 export interface TagNearMiss {
@@ -536,10 +651,13 @@ export interface TagNearMiss {
 }
 
 /**
- * Wording-level variants that canonicalisation cannot safely fold on its own:
- * same dimension, values that agree once punctuation and a trailing plural are
- * ignored, or that differ by a single typo. Suggestions for the upload preview,
- * never applied without a click.
+ * What canonicalisation will NOT fold on its own, and therefore has to ask
+ * about: a value one typo away from an established spelling, the way "Victorain"
+ * is one typo from "Victorian". Anything the vocabulary matches exactly or
+ * loosely is already adopted in silence and is deliberately not reported here —
+ * a suggestion the app has effectively acted on is just noise on the screen.
+ *
+ * Suggestions only, never applied without a click.
  */
 export function tagNearMisses(tags: Iterable<string>, vocab: TagVocabulary): TagNearMiss[] {
   const out: TagNearMiss[] = [];
@@ -549,23 +667,21 @@ export function tagNearMisses(tags: Iterable<string>, vocab: TagVocabulary): Tag
     if (!parsed) continue;
     if (loose(parsed.dimension) === loose(DIFFICULTY_DIMENSION)) continue;
     const stored = formatTag(parsed);
-    // Already an exact bucket match: canonicalisation has it, nothing to ask.
+    // Canonicalisation has these: an exact bucket match, or a loose one.
     if (vocab.byKey.has(tagKey(parsed))) continue;
+    if (vocab.byLoose.has(looseKey(parsed))) continue;
     if (seen.has(stored)) continue;
 
-    const candidates = vocab.byLoose.get(looseKey(parsed)) ?? [];
-    let existing = candidates[0];
-    if (!existing) {
-      // One typo apart, the way "Victorain" is one typo from "Victorian".
-      const [dim, value] = looseKey(parsed).split("|");
-      for (const [key, spellings] of vocab.byLoose) {
-        const [otherDim, otherValue] = key.split("|");
-        if (otherDim !== dim) continue;
-        if (Math.min(value.length, otherValue.length) < 4) continue;
-        if (editDistance(value, otherValue) !== 1) continue;
-        existing = spellings[0];
-        break;
-      }
+    // One typo apart — which may equally be a different word, hence the click.
+    const [dim, value] = looseKey(parsed).split("|");
+    let existing: string | undefined;
+    for (const [key, spelling] of vocab.byLoose) {
+      const [otherDim, otherValue] = key.split("|");
+      if (otherDim !== dim) continue;
+      if (Math.min(value.length, otherValue.length) < 4) continue;
+      if (editDistance(value, otherValue) !== 1) continue;
+      existing = spelling;
+      break;
     }
     if (!existing || existing === stored) continue;
     seen.add(stored);

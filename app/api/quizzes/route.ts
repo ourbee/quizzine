@@ -12,7 +12,7 @@ import { correctKeysOf, isGraded } from "@/lib/questions";
 import { normalizePeerConfig } from "@/lib/peer";
 import { bandCriteria, normalizeRubricConfig } from "@/lib/rubric";
 import { normalizeMstConfig } from "@/lib/mst";
-import { buildVocabulary, canonicalizeTags, findPreset } from "@/lib/tags";
+import { buildVocabulary, canonicalizeBatch, findPreset, preferredSpellings, presetTags, countTags } from "@/lib/tags";
 import type { Question, QuizSettings } from "@/lib/types";
 
 export async function GET() {
@@ -136,22 +136,32 @@ export async function POST(req: NextRequest) {
   };
   /*
    * Tag hygiene at the door: an incoming tag that matches one the teacher
-   * already uses is stored in THEIR spelling, so a case or spacing variant can
-   * never found a second bucket and split a report in half. Done here rather
-   * than only in the browser, because this is the gate every quiz passes
-   * through however it was created.
+   * already uses is stored in THEIR spelling, so a case, spacing or punctuation
+   * variant can never found a second bucket and split a report in half. Done
+   * here rather than only in the browser, because this is the gate every quiz
+   * passes through however it was created.
+   *
+   * Priority order matters. The teacher's own majority spelling outranks the
+   * preset — rewriting a habit they have used two hundred times to match a list
+   * would create exactly the split this prevents — and the preset then fills
+   * the buckets they have never used. The file itself comes last, founding only
+   * what neither of those has claimed, which is what stops a single upload
+   * carrying both "Cultural studies" and "Cultural Studies" into the database.
    */
   const owned = await q<{ questions: Question[] }>(`SELECT questions FROM quizzes WHERE owner = $1`, [owner]);
-  const vocabulary = buildVocabulary(owned.flatMap((z) => (z.questions ?? []).flatMap((qn) => qn.tags ?? [])));
-  if (vocabulary.tags.length) {
-    for (const qn of questions) {
-      if (qn.tags?.length) qn.tags = canonicalizeTags(qn.tags, vocabulary);
-    }
-  }
+  const chosenPreset = findPreset(body.preset);
+  const vocabulary = buildVocabulary([
+    ...preferredSpellings(countTags(owned.flatMap((z) => (z.questions ?? []).flatMap((qn) => qn.tags ?? [])))),
+    ...(chosenPreset ? presetTags(chosenPreset) : []),
+  ]);
+  const canonical = canonicalizeBatch(questions.map((qn) => qn.tags ?? []), vocabulary);
+  questions.forEach((qn, i) => {
+    if (canonical[i].length) qn.tags = canonical[i];
+  });
 
   const id = genId();
   const slug = slugify(body.title);
-  const preset = findPreset(body.preset)?.id ?? null;
+  const preset = chosenPreset?.id ?? null;
   // An allotted quiz is born closed: nobody can sit it until the roster is in
   // and every roll has a question — opening it is what the guardrail checks.
   await q(

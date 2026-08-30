@@ -97,10 +97,27 @@ test("a genuinely new tag is left exactly as written", () => {
   assert.deepEqual(canonicalizeTags(["Genre: Poetry"], vocab), ["Genre: Poetry"]);
 });
 
-test("a wording variant is offered rather than merged, because it is a judgement", () => {
-  const misses = tagNearMisses(["Unit: Unit 9 Literary theory post World War II"], vocab);
-  assert.equal(misses.length, 1);
-  assert.equal(misses[0].existing, "Unit: Unit 9 Literary Theory (Post World War II)");
+test("a punctuation-only rewording is adopted, not asked about", () => {
+  // Same words either way; the brackets are not a judgement, and a queue that
+  // asks about them is a queue that stops being read.
+  assert.deepEqual(canonicalizeTags(["Unit: Unit 9 Literary theory post World War II"], vocab), [
+    "Unit: Unit 9 Literary Theory (Post World War II)",
+  ]);
+  assert.deepEqual(tagNearMisses(["Unit: Unit 9 Literary theory post World War II"], vocab), []);
+});
+
+test("spaced and unspaced initials are one author", () => {
+  const authors = buildVocabulary(["Author: I. A. Richards"]);
+  assert.deepEqual(canonicalizeTags(["Author: I.A. Richards"], authors), ["Author: I. A. Richards"]);
+  assert.deepEqual(tagNearMisses(["Author: I.A. Richards"], authors), []);
+});
+
+test("a middle initial is a different name, and is left for the teacher to judge", () => {
+  const authors = buildVocabulary(["Author: Edward Said"]);
+  assert.deepEqual(canonicalizeTags(["Author: Edward W. Said"], authors), ["Author: Edward W. Said"]);
+  assert.deepEqual(tagNearMisses(["Author: Edward W. Said"], authors), [
+    { incoming: "Author: Edward W. Said", existing: "Author: Edward Said" },
+  ]);
 });
 
 test("a tag that canonicalisation already handles is not also asked about", () => {

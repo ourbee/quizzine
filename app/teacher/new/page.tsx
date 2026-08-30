@@ -5,7 +5,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import TeacherBar from "@/components/TeacherBar";
 import * as XLSX from "xlsx";
@@ -17,7 +17,18 @@ import { correctKeysOf, groupByPassage, isGraded } from "@/lib/questions";
 import { DEFAULT_PEER_CONFIG, peerMaxScore, type PeerConfig } from "@/lib/peer";
 import { aiPrompt } from "@/lib/aiprompt";
 import { DEFAULT_MST, mstCapacity, type MstConfig } from "@/lib/mst";
-import { TAG_PRESETS, buildVocabulary, difficultyLabel, tagNearMisses, type TagNearMiss } from "@/lib/tags";
+import {
+  TAG_PRESETS,
+  buildVocabulary,
+  canonicalizeBatch,
+  difficultyLabel,
+  findPreset,
+  normalizeTags,
+  preferredSpellings,
+  presetTags,
+  tagNearMisses,
+  type TagNearMiss,
+} from "@/lib/tags";
 import { DEFAULT_RUBRIC, rubricErrors, type RubricConfig } from "@/lib/rubric";
 import { THEMES } from "@/lib/themes";
 import type { GradingMode, MultiScoring, ParsedQuiz, Question, RawQuestion, TimerMode } from "@/lib/types";
@@ -221,6 +232,8 @@ export default function NewQuizPage() {
   const [hardWordLimit, setHardWordLimit] = useState(false);
   /** The exact tag spellings this teacher already uses — see lib/tags.ts. */
   const [vocabulary, setVocabulary] = useState<string[]>([]);
+  /** How many questions had a tag quietly rewritten into an established spelling. */
+  const [tagsTidied, setTagsTidied] = useState(0);
   const [introMedia, setIntroMedia] = useState("");
   const [groupMode, setGroupMode] = useState(false);
   const [groupMin, setGroupMin] = useState("2");
@@ -236,7 +249,10 @@ export default function NewQuizPage() {
   useEffect(() => {
     fetch("/api/tags")
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d && setVocabulary(Object.keys(d.counts ?? {})))
+      // One spelling per bucket, majority-first. Handing the model every
+      // spelling in use — drift included — under a heading that says "copy
+      // these character for character" teaches it the drift.
+      .then((d) => d && setVocabulary(preferredSpellings(d.counts ?? {})))
       .catch(() => {});
   }, []);
 
@@ -274,15 +290,26 @@ export default function NewQuizPage() {
   );
   const rubricBroken = (anyRubric || peerFromRubric) && rubricErrors(rubric).length > 0;
 
+  /**
+   * The vocabulary an upload is measured against, in priority order: what this
+   * teacher already writes, then the chosen preset for anything they have never
+   * tagged. The same order the server uses when it saves, so the preview and
+   * the database cannot disagree.
+   */
+  const tagVocabulary = useCallback(() => {
+    const chosen = findPreset(preset);
+    return buildVocabulary([...vocabulary, ...(chosen ? presetTags(chosen) : [])]);
+  }, [vocabulary, preset]);
+
   // Tags in the uploaded file that are probably variants of ones already in use.
   const nearMisses: TagNearMiss[] = useMemo(() => {
-    if (!vocabulary.length) return [];
-    const vocab = buildVocabulary(vocabulary);
+    const vocab = tagVocabulary();
+    if (!vocab.tags.length) return [];
     return tagNearMisses(
       selected.flatMap((d) => d.questions.flatMap((qn) => qn.tags ?? [])),
       vocab
     );
-  }, [selected, vocabulary]);
+  }, [selected, tagVocabulary]);
 
   /** Adopt the established spelling of a tag across every draft that carries it. */
   function adoptTag(miss: TagNearMiss) {
@@ -362,8 +389,40 @@ export default function NewQuizPage() {
     setDrafts((list) => list.map((d) => (d.id === id ? { ...d, ...patch } : d)));
   }
 
+  /**
+   * Fold the file's tags into established spellings before anything is shown.
+   *
+   * The server does this again on save; doing it here as well is what makes the
+   * review screen honest — a teacher who reads "Unit 7 Cultural Studies" in the
+   * editor and finds "Unit 7 Cultural studies" in the report afterwards has
+   * been lied to by the preview. It also catches the case the server cannot see
+   * coming: a FIRST upload that disagrees with itself, where neither spelling
+   * was ever in use and the majority in the file decides.
+   */
+  function tidyTags(list: ParsedQuiz[]): { list: ParsedQuiz[]; tidied: number } {
+    const lists = list.flatMap((p) => p.questions.map((qn) => normalizeTags(qn.tags)));
+    if (!lists.some((t) => t.length)) return { list, tidied: 0 };
+    const canonical = canonicalizeBatch(lists, tagVocabulary());
+    let at = 0;
+    let tidied = 0;
+    const next = list.map((p) => ({
+      ...p,
+      questions: p.questions.map((qn) => {
+        const before = lists[at];
+        const after = canonical[at];
+        at += 1;
+        if (!after.length || after.join(";") === before.join(";")) return qn;
+        tidied += 1;
+        return { ...qn, tags: after };
+      }),
+    }));
+    return { list: next, tidied };
+  }
+
   /** Validate every parsed quiz and move to the review step. */
-  function applyParsed(list: ParsedQuiz[], sources: string[], fallbackTitle?: string) {
+  function applyParsed(rawList: ParsedQuiz[], sources: string[], fallbackTitle?: string) {
+    const { list, tidied } = tidyTags(rawList);
+    setTagsTidied(tidied);
     const many = list.length > 1;
     const stamp = Date.now();
     const built: Draft[] = list.map((parsed, i) => {
@@ -476,6 +535,38 @@ export default function NewQuizPage() {
     ws["!cols"] = TEMPLATE_HEADERS.map((h) => ({ wch: h === "Question" || h.startsWith("Feedback") ? 40 : 14 }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Questions");
+
+    /*
+     * A second sheet carrying the exact spellings to copy into the Tags column.
+     * Someone filling a template will copy a spelling that is in front of them
+     * and invent one that is not, so the cheapest way to prevent drift is to
+     * put the vocabulary in the file. (A real dropdown would be better still,
+     * but data validation is not something this spreadsheet writer can emit.)
+     */
+    const chosen = findPreset(preset);
+    const known = buildVocabulary([...vocabulary, ...(chosen ? presetTags(chosen) : [])]).tags;
+    const rows = [
+      { Tag: "HOW TO WRITE A TAG", Notes: "Dimension: Value — several tags in one cell, separated by semicolons." },
+      { Tag: "Period: Victorian; Genre: Poetry", Notes: "A complete Tags cell looks like this." },
+      { Tag: "", Notes: "" },
+      { Tag: "RULES", Notes: "Values are sentence case: capital on the first word and proper nouns only." },
+      { Tag: "", Notes: "Author initials are spaced — I. A. Richards, not I.A. Richards." },
+      { Tag: "", Notes: "Titles keep their own capitals and apostrophes — Tess of the d’Urbervilles." },
+      { Tag: "", Notes: "Never put a comma inside a tag: a comma starts a new tag." },
+      { Tag: "", Notes: "Difficulty is its own column, 1–5. Do not also write it as a tag." },
+      { Tag: "", Notes: "" },
+      {
+        Tag: known.length ? "COPY THESE" : "NO TAGS YET",
+        Notes: known.length
+          ? "Character for character. A tag differing only in case founds a second bucket and halves your report."
+          : "Pick a tag vocabulary on the New quiz screen, or invent one and then keep to it.",
+      },
+      ...known.map((t) => ({ Tag: t, Notes: "" })),
+    ];
+    const vocabSheet = XLSX.utils.json_to_sheet(rows, { header: ["Tag", "Notes"] });
+    vocabSheet["!cols"] = [{ wch: 44 }, { wch: 78 }];
+    XLSX.utils.book_append_sheet(wb, vocabSheet, "Tags");
+
     XLSX.writeFile(wb, "quizzine-template.xlsx");
   }
 
@@ -927,11 +1018,24 @@ export default function NewQuizPage() {
           </div>
 
           {/*
-            Wording-level tag variants. Case and spacing differences are already
-            folded into the established spelling when the quiz is saved; these
-            are the ones that need a judgement, so they are offered rather than
-            applied. Left alone they simply publish as written.
+            Near misses. Case, spacing and punctuation are already folded in
+            above; what is left here is a value one typo from an established
+            spelling, which may equally be a different word — so it is offered
+            rather than applied. Left alone it simply publishes as written.
           */}
+          {tagsTidied > 0 && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-semibold text-slate-800">
+                Tags on {tagsTidied} question{tagsTidied === 1 ? "" : "s"} were folded into the spelling already in use
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                Only differences of case, spacing or punctuation — the words are unchanged. Where the file disagreed
+                with itself and neither spelling was in use before, the one on the most questions won. Edit any
+                question below if you meant them to be different tags.
+              </p>
+            </div>
+          )}
+
           {nearMisses.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
               <p className="text-sm font-semibold text-amber-900">

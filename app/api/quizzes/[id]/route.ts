@@ -14,7 +14,7 @@ import { normalizeMstConfig, servedQuestions } from "@/lib/mst";
 import { normalizePeerConfig } from "@/lib/peer";
 import { bandCriteria, normalizeRubricConfig } from "@/lib/rubric";
 import { validateQuestions } from "@/lib/validate";
-import { buildVocabulary, canonicalizeTags, findPreset } from "@/lib/tags";
+import { buildVocabulary, canonicalizeBatch, findPreset, preferredSpellings, presetTags, countTags } from "@/lib/tags";
 import type { MstState } from "@/lib/mst";
 import type { PerQuestionResult, Question, QuizSettings, RawQuestion } from "@/lib/types";
 
@@ -99,16 +99,20 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         ...(weights && Object.keys(weights).length ? { rubricWeights: weights } : {}),
       };
     });
-    // The same hygiene an upload gets: an edited tag that matches an existing
-    // spelling is stored in that spelling rather than founding a variant.
+    // The same hygiene an upload gets, in the same priority order: an edited tag
+    // that matches an existing spelling is stored in that spelling rather than
+    // founding a variant, and the edit is made to agree with itself as well.
     const owned = await q<{ questions: Question[] }>(
       `SELECT questions FROM quizzes WHERE owner = $1 AND id <> $2`,
       [owner, id]
     );
-    const vocabulary = buildVocabulary(owned.flatMap((z) => (z.questions ?? []).flatMap((qn) => qn.tags ?? [])));
-    const canonical = vocabulary.tags.length
-      ? withIds.map((qn) => (qn.tags?.length ? { ...qn, tags: canonicalizeTags(qn.tags, vocabulary) } : qn))
-      : withIds;
+    const editPreset = findPreset(body.preset !== undefined ? body.preset : stored.preset);
+    const vocabulary = buildVocabulary([
+      ...preferredSpellings(countTags(owned.flatMap((z) => (z.questions ?? []).flatMap((qn) => qn.tags ?? [])))),
+      ...(editPreset ? presetTags(editPreset) : []),
+    ]);
+    const rewritten = canonicalizeBatch(withIds.map((qn) => qn.tags ?? []), vocabulary);
+    const canonical = withIds.map((qn, i) => (rewritten[i].length ? { ...qn, tags: rewritten[i] } : qn));
 
     plan = planEdit(before, canonical, attemptCount > 0);
     questions = plan.questions;

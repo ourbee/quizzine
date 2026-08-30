@@ -8,6 +8,11 @@ import { test } from "node:test";
 import {
   DEFAULT_DIMENSION,
   applyTagMerges,
+  buildVocabulary,
+  canonicalizeBatch,
+  countTags,
+  preferredSpellings,
+  presetTags,
   dimensionsOf,
   extractDifficulty,
   findPreset,
@@ -149,4 +154,103 @@ test("a preset flags unknown values but accepts anything under an open dimension
     preset
   );
   assert.deepEqual(stray, ["Period: Steampunk"], "Author is open, so any name passes");
+});
+
+// ---------- one spelling per bucket ----------
+
+test("the majority spelling wins a bucket, whatever order it is offered in", () => {
+  const counts = { "Unit 7 Cultural studies": 10, "Unit 7 Cultural Studies": 8 };
+  assert.deepEqual(preferredSpellings(counts), ["Unit 7 Cultural studies"]);
+  assert.deepEqual(preferredSpellings({ ...counts, "Unit 7 Cultural Studies": 12 }), [
+    "Unit 7 Cultural Studies",
+  ]);
+});
+
+test("a tie is broken alphabetically, so the answer never depends on iteration order", () => {
+  assert.deepEqual(preferredSpellings({ "Genre: poetry": 4, "Genre: Poetry": 4 }), ["Genre: Poetry"]);
+});
+
+test("rival spellings never both enter a vocabulary", () => {
+  const vocab = buildVocabulary(["Author: I. A. Richards", "Author: I.A. Richards"]);
+  assert.deepEqual(vocab.tags, ["Author: I. A. Richards"], "the first offered owns the bucket");
+  assert.equal(vocab.byLoose.size, 1);
+});
+
+test("counting is by stored spelling, and only whitespace is tidied first", () => {
+  assert.deepEqual(countTags(["Period: Victorian", "Period:  Victorian ", "Period: victorian"]), {
+    "Period: Victorian": 2,
+    "Period: victorian": 1,
+  });
+});
+
+// ---------- a file made to agree with itself ----------
+
+test("a first upload carrying both spellings founds one bucket, not two", () => {
+  // Nothing was in use before, so nothing can be adopted from the teacher —
+  // the majority within the file decides, and the file agrees with itself.
+  const lists = [
+    ["Unit 7 Cultural studies"],
+    ["Unit 7 Cultural Studies"],
+    ["Unit 7 Cultural studies"],
+    ["Unit 7 CULTURAL STUDIES"],
+  ];
+  const out = canonicalizeBatch(lists, buildVocabulary([]));
+  assert.deepEqual(new Set(out.flat()), new Set(["Unit 7 Cultural studies"]));
+});
+
+test("the majority in a file does not depend on which question comes first", () => {
+  const minorityFirst = canonicalizeBatch(
+    [["Genre: Poetries"], ["Genre: Poetry"], ["Genre: Poetry"]],
+    buildVocabulary([])
+  );
+  assert.deepEqual(minorityFirst.flat(), ["Genre: Poetry", "Genre: Poetry", "Genre: Poetry"]);
+});
+
+test("what the teacher already writes outranks the file's own majority", () => {
+  const out = canonicalizeBatch(
+    [["Period: victorian"], ["Period: victorian"], ["Period: victorian"]],
+    buildVocabulary(["Period: Victorian"])
+  );
+  assert.deepEqual(out.flat(), ["Period: Victorian", "Period: Victorian", "Period: Victorian"]);
+});
+
+test("a preset fills the buckets a teacher has never used, and no others", () => {
+  const preset = findPreset("ugc-net-english")!;
+  // Established usage first, preset second — the order the routes use.
+  const vocab = buildVocabulary(["Unit: Unit 8 Literary Criticism", ...presetTags(preset)]);
+  assert.deepEqual(
+    canonicalizeTagsVia(vocab, "Unit: Unit 8 Literary criticism"),
+    "Unit: Unit 8 Literary Criticism",
+    "a habit used two hundred times is not rewritten to match a list"
+  );
+  assert.deepEqual(
+    canonicalizeTagsVia(vocab, "Period: romantic"),
+    "Period: Romantic",
+    "a bucket the teacher has never used takes the preset's spelling"
+  );
+});
+
+function canonicalizeTagsVia(vocab: ReturnType<typeof buildVocabulary>, tag: string): string {
+  return canonicalizeBatch([[tag]], vocab)[0][0];
+}
+
+// ---------- mechanical versus judgement ----------
+
+test("case, spacing and punctuation groups are mechanical; a near miss is not", () => {
+  const groups = tagVariants({
+    "Unit 7 Cultural studies": 10,
+    "Unit 7 Cultural Studies": 8,
+    "Author: I. A. Richards": 13,
+    "Author: I.A. Richards": 2,
+    "Author: Edward Said": 5,
+    "Author: Edward W. Said": 2,
+  });
+  const byKeep = Object.fromEntries(groups.map((g) => [g.keep, g]));
+  assert.equal(byKeep["Unit 7 Cultural studies"].mechanical, true);
+  assert.equal(byKeep["Author: I. A. Richards"].mechanical, true);
+  assert.equal(
+    byKeep["Author: Edward Said"].mechanical,
+    false,
+    "a missing middle initial is a judgement, and must keep asking"
+  );
 });

@@ -81,12 +81,19 @@ Every question needs a Tags value and a Difficulty value.
 Tags say what the question is TESTING, written as "Dimension: Value" and separated by semicolons:
 Period: Victorian; Genre: Poetry; Author: Tennyson; Skill: Close reading
 
+A tag value may never contain a comma — a comma separates tags, so "Narayan, R. K." becomes two broken tags.
+
 Rules for tagging:
 1. Give each question 2 to 5 tags. One tag per dimension. Never invent a tag for something the question does not actually test.
-2. Use EXACTLY the dimension names and values listed under MY TAG VOCABULARY below, spelled exactly as written there. Consistency matters more than precision: "Victorian" and "Victorian Age" as two spellings of one period split my report into two half-empty buckets and make both useless.
-3. Where a dimension is marked "open" (Author, Text), any value is fine, but use the standard form of the name — "Tennyson", not "Lord Alfred Tennyson" — and use the same form every time.
-4. If a question genuinely does not fit a dimension, leave that dimension out rather than forcing it.
-5. Tag what the question TESTS, not what it mentions in passing. A question that quotes Tennyson to ask about metre is Skill: Close reading and Genre: Poetry, not Author: Tennyson.
+2. Use EXACTLY the dimension names and values listed under MY TAG VOCABULARY below, spelled exactly as written there — same capitalisation, same spacing, same punctuation. Consistency matters more than precision: "Victorian" and "Victorian Age" as two spellings of one period split my report into two half-empty buckets and make both useless.
+3. Values are SENTENCE CASE: a capital on the first word and on proper nouns, nothing else. Write "Unit 8 Literary criticism", not "Unit 8 Literary Criticism"; "Skill: Close reading", not "Skill: Close Reading". Do not "tidy" a value in my list into title case — that is the single commonest way you will break rule 2.
+4. Never reword a value in my list. No parentheses where I have none, no hyphens I have not written, no shortening: "Unit 9 Literary theory post World War II" is that string, not "Unit 9 Literary Theory (Post World War II)".
+5. Where a dimension is marked "open" (Author, Text), any value is fine, but use the standard form of the name and the same form every time:
+   - Authors: initials spaced, each with a full stop — "I. A. Richards", "D. H. Lawrence", "R. K. Narayan". Not "I.A. Richards". Never expand initials to forenames ("Tennyson", not "Lord Alfred Tennyson"), and never invert to "Surname, Forename" — a comma inside a tag splits it in two.
+   - Texts: the title as printed, keeping its own capitalisation and apostrophes — "Tess of the d'Urbervilles".
+   - Include a middle initial only where the name is normally cited with one: it is "Edward Said", not "Edward W. Said".
+6. If a question genuinely does not fit a dimension, leave that dimension out rather than forcing it.
+7. Tag what the question TESTS, not what it mentions in passing. A question that quotes Tennyson to ask about metre is Skill: Close reading and Genre: Poetry, not Author: Tennyson.
 
 Difficulty is a whole number from 1 to 5: 1 very easy, 2 easy, 3 medium, 4 difficult, 5 very difficult. Judge it against the level I named, not against the general population. Spread the difficulties deliberately rather than marking everything 3 — if I have asked for an adaptive paper I need a usable number of questions at EVERY level, so aim for a roughly even spread across 1 to 5 unless I have said otherwise.
 

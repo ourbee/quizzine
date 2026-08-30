@@ -118,6 +118,36 @@ export default function TagsPage() {
     load();
   }
 
+  /**
+   * Groups whose spellings differ only in case, spacing, punctuation or a
+   * trailing plural. Nobody meant to make those differences, so nobody should
+   * have to click nine times to unmake them — and a queue where most cards are
+   * noise is a queue that stops being read.
+   */
+  const mechanical = useMemo(() => (vocab?.variants ?? []).filter((g) => g.mechanical), [vocab]);
+
+  /** Fold every mechanical group into its most-used spelling, in one request. */
+  async function mergeMechanical() {
+    setBusy("merge-all");
+    const merges: Record<string, string> = {};
+    for (const group of mechanical) {
+      for (const tag of group.merge) merges[tag] = group.keep;
+    }
+    const res = await fetch("/api/tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ merges }),
+    });
+    setBusy("");
+    const data = await res.json().catch(() => ({}));
+    setMessage(
+      res.ok
+        ? `Folded ${mechanical.length} spelling${mechanical.length === 1 ? "" : "s"} into the spelling you use most, across ${data.changed} questions.`
+        : (data.error ?? "Could not merge.")
+    );
+    load();
+  }
+
   /** Apply the bulk box to every ticked question, adding rather than replacing. */
   function applyBulk() {
     if (!bulk.trim() || !chosen.size) return;
@@ -222,6 +252,22 @@ export default function TagsPage() {
                 Two spellings of one topic split it into two buckets, each too small to draw a conclusion from.
                 Nothing is merged until you choose which spelling to keep.
               </p>
+              {mechanical.length > 1 && (
+                <div className="mt-3 rounded-xl border border-amber-300 bg-white p-3">
+                  <p className="text-sm text-slate-700">
+                    <span className="font-semibold text-slate-900">{mechanical.length} of these differ only in case, spacing or punctuation.</span>{" "}
+                    The words are identical, so there is nothing to decide — each can be folded into whichever spelling
+                    you already use most.
+                  </p>
+                  <button
+                    onClick={mergeMechanical}
+                    disabled={busy === "merge-all"}
+                    className="mt-2 rounded-lg bg-amber-700 px-4 py-1.5 text-sm font-semibold text-white hover:bg-amber-800 disabled:opacity-40"
+                  >
+                    {busy === "merge-all" ? "Merging…" : `Fold all ${mechanical.length} in`}
+                  </button>
+                </div>
+              )}
               <div className="mt-3 space-y-3">
                 {vocab.variants.map((group) => (
                   <div key={group.keep} className="rounded-xl border border-amber-200 bg-white p-3">
