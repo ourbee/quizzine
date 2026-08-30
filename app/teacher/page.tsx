@@ -5,7 +5,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Logo from "@/components/Logo";
 import TeacherBar from "@/components/TeacherBar";
@@ -21,6 +21,18 @@ interface QuizRow {
 }
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+
+/** Which quizzes the list is showing, and in what order. */
+type Shown = "all" | "open" | "closed";
+type Sort = "newest" | "oldest" | "title" | "responses";
+const VIEW_KEY = "quizzine-dashboard-view";
+
+const SORTS: [Sort, string][] = [
+  ["newest", "Newest first"],
+  ["oldest", "Oldest first"],
+  ["title", "Title A–Z"],
+  ["responses", "Most responses"],
+];
 
 declare global {
   interface Window {
@@ -42,6 +54,32 @@ export default function TeacherPage() {
   const [pass, setPass] = useState("");
   const [error, setError] = useState("");
   const googleBtn = useRef<HTMLDivElement>(null);
+  const [search, setSearch] = useState("");
+  const [only, setOnly] = useState<Shown>("all");
+  const [sort, setSort] = useState<Sort>("newest");
+  const [busy, setBusy] = useState("");
+  const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
+  const [copied, setCopied] = useState("");
+
+  // The list is filtered the way it was left. A teacher who works in one term's
+  // quizzes should not have to re-narrow the dashboard every morning.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(VIEW_KEY);
+      if (!saved) return;
+      const view = JSON.parse(saved) as { only?: Shown; sort?: Sort };
+      if (view.only === "all" || view.only === "open" || view.only === "closed") setOnly(view.only);
+      if (view.sort === "newest" || view.sort === "oldest" || view.sort === "title" || view.sort === "responses") {
+        setSort(view.sort);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_KEY, JSON.stringify({ only, sort }));
+    } catch {}
+  }, [only, sort]);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/quizzes");
@@ -125,6 +163,81 @@ export default function TeacherPage() {
   }
 
 
+  /**
+   * The list as it is actually shown: searched, filtered, sorted.
+   *
+   * All of it happens here rather than on the server because the dashboard
+   * already holds every row a teacher owns — asking the database again to
+   * narrow a list that is in memory would only make typing feel slower.
+   */
+  const visible = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    const rows = quizzes.filter((quiz) => {
+      if (only === "open" && !quiz.accepting) return false;
+      if (only === "closed" && quiz.accepting) return false;
+      if (!needle) return true;
+      return `${quiz.title} ${quiz.slug}`.toLowerCase().includes(needle);
+    });
+    const ordered = [...rows];
+    ordered.sort((a, b) => {
+      if (sort === "title") return a.title.localeCompare(b.title);
+      if (sort === "responses") return Number(b.responses) - Number(a.responses);
+      const at = new Date(a.created_at).getTime();
+      const bt = new Date(b.created_at).getTime();
+      return sort === "oldest" ? at - bt : bt - at;
+    });
+    return ordered;
+  }, [quizzes, search, only, sort]);
+
+  const openCount = quizzes.filter((z) => z.accepting).length;
+  const totalResponses = quizzes.reduce((sum, z) => sum + Number(z.responses), 0);
+  const filtering = search.trim() !== "" || only !== "all";
+
+  /**
+   * Open or close a quiz without leaving the dashboard.
+   *
+   * The server can refuse — an allotted test may not open until every roll on
+   * the roster has a question — so its reason is shown against the row rather
+   * than swallowed, and the row is put back the way it was.
+   */
+  async function toggleAccepting(quiz: QuizRow) {
+    setBusy(quiz.id);
+    setRowError(null);
+    const res = await fetch(`/api/quizzes/${quiz.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accepting: !quiz.accepting }),
+    });
+    setBusy("");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setRowError({ id: quiz.id, message: data.error ?? "Could not change that." });
+      return;
+    }
+    setQuizzes((rows) => rows.map((r) => (r.id === quiz.id ? { ...r, accepting: !quiz.accepting } : r)));
+  }
+
+  /**
+   * The student link, without opening the quiz.
+   *
+   * The clipboard is not always ours to write to — a browser may refuse it
+   * outright — and a copy button that quietly does nothing is worse than no
+   * button at all, because the teacher goes away and pastes whatever was there
+   * before. So a refusal puts the address on screen instead, to be copied by
+   * hand.
+   */
+  async function copyLink(quiz: QuizRow) {
+    const url = `${window.location.origin}/q/${quiz.slug}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setRowError(null);
+      setCopied(quiz.id);
+      setTimeout(() => setCopied(""), 1600);
+    } catch {
+      setRowError({ id: quiz.id, message: `Your browser would not let the page copy that. The link is: ${url}` });
+    }
+  }
+
   if (state === "loading") {
     return <main className="max-w-3xl mx-auto px-6 py-20 text-center text-slate-500">Loading…</main>;
   }
@@ -169,71 +282,186 @@ export default function TeacherPage() {
   return (
     <main className="max-w-4xl mx-auto px-6 py-12 w-full">
       <TeacherBar back={null} owner={owner} />
-      <div className="mt-3 flex items-center justify-between flex-wrap gap-3">
+
+      <div id="quizzes" className="mt-3 flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Your quizzes</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            {quizzes.length === 0 ? "Nothing here yet — create your first quiz." : `${quizzes.length} quiz${quizzes.length === 1 ? "" : "zes"}`}
+            {quizzes.length === 0
+              ? "Nothing here yet — create your first quiz."
+              : `${quizzes.length} quiz${quizzes.length === 1 ? "" : "zes"} · ${openCount} open · ${totalResponses} response${totalResponses === 1 ? "" : "s"} in total`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/teacher/reports"
-            className="rounded-lg border border-slate-300 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-100 transition"
-          >
-            Reports
-          </Link>
-          <Link
-            href="/teacher/analytics"
-            className="rounded-lg border border-slate-300 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-100 transition"
-          >
-            Strengths
-          </Link>
-          <Link
-            href="/teacher/tags"
-            className="rounded-lg border border-slate-300 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-100 transition"
-          >
-            Tags
-          </Link>
-          <Link href="/teacher/new" className="rounded-lg bg-blue-700 px-5 py-2.5 text-white font-semibold hover:bg-blue-800 transition">
-            + New quiz
-          </Link>
-        </div>
+        <Link href="/teacher/new" className="rounded-lg bg-blue-700 px-5 py-2.5 text-white font-semibold hover:bg-blue-800 transition">
+          + New quiz
+        </Link>
       </div>
 
-      <div className="mt-8 space-y-3">
-        {quizzes.map((quiz) => (
+      {/* Everything else a teacher comes to the dashboard to reach, in one row. */}
+      <nav className="mt-4 flex flex-wrap gap-2 text-sm">
+        {(
+          [
+            ["/teacher/reports", "Reports", "Marks for one quiz, or across several"],
+            ["/teacher/analytics", "Strengths", "What the class is good and weak at"],
+            ["/teacher/tags", "Tags", "Keep one topic from becoming two"],
+          ] as [string, string, string][]
+        ).map(([href, label, title]) => (
           <Link
+            key={href}
+            href={href}
+            title={title}
+            className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 font-semibold text-slate-700 hover:bg-slate-100 transition"
+          >
+            {label}
+          </Link>
+        ))}
+        <a
+          href="#backup"
+          title="Download your quizzes and results"
+          className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 font-semibold text-slate-700 hover:bg-slate-100 transition"
+        >
+          Back up
+        </a>
+        <a
+          href="/"
+          title="The public front page"
+          className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 font-semibold text-slate-700 hover:bg-slate-100 transition"
+        >
+          Home
+        </a>
+      </nav>
+
+      {/* Finding one quiz among a term of them. Hidden while there is nothing to search. */}
+      {quizzes.length > 1 && (
+        <div className="mt-6 flex flex-wrap items-center gap-2">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search your quizzes…"
+            aria-label="Search your quizzes by title or link"
+            className="min-w-[12rem] flex-1 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch("")}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+            >
+              Clear
+            </button>
+          )}
+          <div className="flex gap-1">
+            {(
+              [
+                ["all", "All"],
+                ["open", "Open"],
+                ["closed", "Closed"],
+              ] as [Shown, string][]
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                onClick={() => setOnly(value)}
+                aria-pressed={only === value}
+                className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                  only === value ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as Sort)}
+            aria-label="Sort your quizzes"
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+          >
+            {SORTS.map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {filtering && quizzes.length > 1 && (
+        <p className="mt-2 text-xs text-slate-500">
+          Showing {visible.length} of {quizzes.length}
+        </p>
+      )}
+
+      <div className="mt-4 space-y-3">
+        {visible.map((quiz) => (
+          <div
             key={quiz.id}
-            href={`/teacher/quiz/${quiz.id}`}
-            className="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm hover:border-blue-300 hover:shadow transition"
+            className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-blue-300 hover:shadow"
           >
             <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div>
-                <p className="font-semibold text-slate-900">{quiz.title}</p>
+              <Link href={`/teacher/quiz/${quiz.id}`} className="min-w-0 flex-1 group">
+                <p className="font-semibold text-slate-900 group-hover:text-blue-800">{quiz.title}</p>
                 <p className="text-xs text-slate-500 mt-0.5">
                   /q/{quiz.slug} · created {new Date(quiz.created_at).toLocaleDateString()}
                 </p>
-              </div>
+              </Link>
               <div className="flex items-center gap-3 text-sm">
                 <span className="text-slate-600">{Number(quiz.responses)} response{Number(quiz.responses) === 1 ? "" : "s"}</span>
-                <span
-                  className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                    quiz.accepting ? "bg-green-100 text-green-800" : "bg-slate-200 text-slate-600"
+                <button
+                  onClick={() => toggleAccepting(quiz)}
+                  disabled={busy === quiz.id}
+                  title={quiz.accepting ? "Stop accepting responses" : "Start accepting responses"}
+                  className={`rounded-full px-2.5 py-0.5 text-xs font-medium disabled:opacity-50 ${
+                    quiz.accepting ? "bg-green-100 text-green-800 hover:bg-green-200" : "bg-slate-200 text-slate-600 hover:bg-slate-300"
                   }`}
                 >
-                  {quiz.accepting ? "Open" : "Closed"}
-                </span>
+                  {busy === quiz.id ? "…" : quiz.accepting ? "Open" : "Closed"}
+                </button>
               </div>
             </div>
-          </Link>
+
+            {/* The two things worth doing to a quiz without opening it. */}
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold">
+              <button
+                onClick={() => copyLink(quiz)}
+                className="rounded-lg border border-slate-300 px-2.5 py-1 text-slate-600 hover:bg-slate-100"
+              >
+                {copied === quiz.id ? "Link copied ✓" : "Copy student link"}
+              </button>
+              {Number(quiz.responses) > 0 && (
+                <Link
+                  href={`/teacher/quiz/${quiz.id}/mark`}
+                  className="rounded-lg border border-slate-300 px-2.5 py-1 text-slate-600 hover:bg-slate-100"
+                >
+                  Mark
+                </Link>
+              )}
+            </div>
+
+            {rowError?.id === quiz.id && <p className="mt-2 text-xs text-red-600">{rowError.message}</p>}
+          </div>
         ))}
+
+        {quizzes.length > 0 && visible.length === 0 && (
+          <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
+            <p className="font-medium">Nothing matched</p>
+            <p className="text-sm mt-1">
+              No quiz here matches that search or filter.{" "}
+              <button
+                onClick={() => {
+                  setSearch("");
+                  setOnly("all");
+                }}
+                className="font-semibold text-blue-800 underline underline-offset-2"
+              >
+                Show them all
+              </button>
+            </p>
+          </div>
+        )}
+
         {quizzes.length === 0 && (
           <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-slate-500">
             <p className="font-medium">No quizzes yet</p>
             <p className="text-sm mt-1">
-              Click <span className="font-semibold">New quiz</span>, copy the AI prompt, generate questions with
-              ChatGPT/Claude/Gemini, and upload the result.
+              Click <span className="font-semibold">New quiz</span>. You can write the questions yourself, have
+              ChatGPT/Claude/Gemini build them, or upload a file you already have.
             </p>
           </div>
         )}
@@ -306,7 +534,7 @@ function AccountPanel() {
 
   return (
     <section className="mt-10 space-y-4">
-      <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <div id="backup" className="scroll-mt-6 rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="font-bold text-slate-900">Back up your work</h2>
         <p className="mt-1 text-sm text-slate-500">
           Your quizzes and every student result in one JSON file. Free database plans suspend projects that go
