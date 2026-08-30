@@ -27,6 +27,37 @@ code is the authority now and the differences are the interesting part:
 
 ---
 
+## Round 1 fixes, 2026-08-30 — the register's dropdowns
+
+Reported after the first real use of the allotment screen: picking a question
+from a row's dropdown did not stick, and the summary line above the table
+disagreed with the rows under it.
+
+- **A roll dealt nothing swallowed every pick.** `overrideQid` wrote the hand
+  with `qids.map((old, j) => j === slot ? qid : old)`, and `map` over an empty
+  array is an empty array — so the row was marked "edited" and snapped straight
+  back to "— no question —". The write now goes through `setAllottedQid` in
+  `lib/allot.ts`, which pads the hand with `""` holes up to the slot being set,
+  swaps rather than dealing one student the same question twice, and clears on
+  an empty pick.
+- **The `— no question —` option is no longer conditional.** An option list
+  that changes length in the same render as the value is how a controlled
+  `<select>` ends up showing something other than what was clicked.
+- **Holes are not questions.** `allotmentCoverage` ignores empty slots when it
+  counts reuse, so the "dealt to more than one student" warning can no longer
+  appear over rows that show no question; it also reports `incomplete` (rolls
+  dealt fewer than `perStudent`), and `normalizeAllotment` strips the holes on
+  the way to storage, so nothing ever persists one.
+- **Dealing is the default.** An uploaded roster is dealt at once, and a
+  "Fill the N empty slots evenly" button (`fillAllotmentGaps`) fills only the
+  holes, giving each the least-used question the student does not already hold,
+  leaving hands set by hand alone.
+- **The register is readable from the results page**, not only the editor: a
+  read-only roll → question table with a filter, a submitted column, and an
+  .xlsx export (the editor got the same export and filter).
+
+---
+
 ## 1. What this is
 
 A new quiz mode where every student gets a **different question** — not a

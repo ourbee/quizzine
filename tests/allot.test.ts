@@ -10,8 +10,10 @@ import {
   allotmentProblems,
   allottedFor,
   dealAllotment,
+  fillAllotmentGaps,
   normalizeAllotment,
   parseRoster,
+  setAllottedQid,
   type Allotment,
 } from "../lib/allot.ts";
 import type { Question } from "../lib/types.ts";
@@ -247,4 +249,99 @@ test("an allotted student's package covers their own question only", async () =>
   });
   assert.deepEqual(Object.values(pack.codeMap).map((r) => r.qid), ["q2"]);
   assert.equal(pack.blank, 2, "the two questions they never sat are counted as blank, not marked");
+});
+
+
+// The editor's dropdowns. The bug these cover: a roll dealt nothing has an
+// empty qids array, and the old `qids.map(...)` over it produced another empty
+// array — so every question picked by hand for that roll was thrown away while
+// the row was still marked "edited".
+
+test("setAllottedQid fills a slot on a roll that was dealt nothing", () => {
+  const a: Allotment = {
+    semester: 1,
+    perStudent: 1,
+    seed: "s",
+    entries: [
+      { roll: "1", qids: ["q1"] },
+      { roll: "2", qids: [] },
+    ],
+  };
+  const next = setAllottedQid(a, "2", 0, "q2");
+  assert.deepEqual(next.entries[1].qids, ["q2"]);
+  assert.equal(next.entries[1].manual, true);
+  assert.deepEqual(next.entries[0].qids, ["q1"], "the other rolls are untouched");
+  assert.deepEqual(a.entries[1].qids, [], "the input is not mutated");
+});
+
+test("setAllottedQid pads a short hand up to the slot being set", () => {
+  const a: Allotment = { semester: 1, perStudent: 3, seed: "s", entries: [{ roll: "7", qids: ["q1"] }] };
+  const next = setAllottedQid(a, "7", 2, "q3");
+  assert.deepEqual(next.entries[0].qids, ["q1", "", "q3"]);
+});
+
+test("setAllottedQid swaps rather than dealing one student the same question twice", () => {
+  const a: Allotment = { semester: 1, perStudent: 2, seed: "s", entries: [{ roll: "1", qids: ["q1", "q2"] }] };
+  const next = setAllottedQid(a, "1", 1, "q1");
+  assert.deepEqual(next.entries[0].qids, ["q2", "q1"]);
+});
+
+test("setAllottedQid takes a roll however it is typed, and clears on an empty pick", () => {
+  const a: Allotment = { semester: 1, perStudent: 1, seed: "s", entries: [{ roll: "5", qids: ["q1"] }] };
+  assert.deepEqual(setAllottedQid(a, " 5 ", 0, "q2").entries[0].qids, ["q2"]);
+  assert.deepEqual(setAllottedQid(a, "5", 0, "").entries[0].qids, [""]);
+});
+
+// The status line must describe the rows as they are shown, holes included.
+
+test("coverage treats an empty slot as a hole, not as a dealt question", () => {
+  const a: Allotment = {
+    semester: 1,
+    perStudent: 2,
+    seed: "s",
+    entries: [
+      { roll: "1", qids: ["q1", ""] },
+      { roll: "2", qids: ["", ""] },
+    ],
+  };
+  const cov = allotmentCoverage(a, [q("q1"), q("q2")]);
+  assert.deepEqual(cov.unassigned, ["2"]);
+  assert.deepEqual(cov.incomplete, ["1", "2"]);
+  assert.equal(cov.reused, 0, "an empty slot is never a reused question");
+  assert.equal(cov.unused, 1);
+  assert.equal(allotmentProblems(a, [q("q1"), q("q2")]).length, 1);
+});
+
+test("normalizeAllotment strips the editor's empty slots", () => {
+  const a = normalizeAllotment({ semester: 1, perStudent: 2, seed: "s", entries: [{ roll: "1", qids: ["q1", ""] }] });
+  assert.deepEqual(a?.entries[0].qids, ["q1"]);
+});
+
+test("fillAllotmentGaps fills only the holes, evenly, without repeating within a hand", () => {
+  const a: Allotment = {
+    semester: 1,
+    perStudent: 2,
+    seed: "s",
+    entries: [
+      { roll: "1", qids: ["q1", "q2"], manual: true },
+      { roll: "2", qids: ["", ""] },
+      { roll: "3", qids: ["q1", ""] },
+    ],
+  };
+  const next = fillAllotmentGaps(a, bank(4), "seed");
+  assert.deepEqual(next.entries[0].qids, ["q1", "q2"], "a full hand is left alone");
+  for (const e of next.entries) {
+    assert.equal(e.qids.filter(Boolean).length, 2);
+    assert.equal(new Set(e.qids).size, 2, "no student holds the same question twice");
+  }
+  const usage = new Map<string, number>();
+  for (const e of next.entries) for (const id of e.qids) usage.set(id, (usage.get(id) ?? 0) + 1);
+  assert.ok(Math.max(...usage.values()) - Math.min(...usage.values()) <= 1, "the bank is spread evenly");
+});
+
+test("fillAllotmentGaps leaves a hole when the bank is smaller than the hand", () => {
+  const a: Allotment = { semester: 1, perStudent: 3, seed: "s", entries: [{ roll: "1", qids: [] }] };
+  const next = fillAllotmentGaps(a, bank(2), "seed");
+  assert.deepEqual(next.entries[0].qids.filter(Boolean).length, 2);
+  assert.equal(next.entries[0].qids.length, 3);
 });

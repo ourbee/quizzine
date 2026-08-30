@@ -13,9 +13,11 @@ import * as XLSX from "xlsx";
 import {
   allotmentCoverage,
   dealAllotment,
+  fillAllotmentGaps,
   newSeed,
   normalizeAllotment,
   parseRoster,
+  setAllottedQid,
   type Allotment,
 } from "@/lib/allot";
 import { NO_SEMESTER, SEMESTER_CHOICES, semesterLabel } from "@/lib/normalize";
@@ -75,6 +77,7 @@ export default function EditQuizPage() {
   const [rosterNote, setRosterNote] = useState("");
   const [perStudent, setPerStudent] = useState("1");
   const [allotSemester, setAllotSemester] = useState("1");
+  const [registerFilter, setRegisterFilter] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -210,8 +213,8 @@ export default function EditQuizPage() {
    * seed each click is what makes "Deal again" reshuffle. Manual overrides are
    * a deliberate act, so re-dealing over them asks first.
    */
-  function deal() {
-    const parsed = parseRoster(rosterText);
+  function deal(text: string = rosterText) {
+    const parsed = parseRoster(text);
     const notes: string[] = [];
     if (parsed.invalid.length) {
       notes.push(`Skipped (not digits-only roll numbers): ${parsed.invalid.slice(0, 6).join(", ")}${parsed.invalid.length > 6 ? ", …" : ""}.`);
@@ -248,25 +251,54 @@ export default function EditQuizPage() {
       const values = rowsIn.map((r) => String(r[rollHeader] ?? "").trim()).filter(Boolean);
       if (!values.length) throw new Error(`no values found under “${rollHeader}”.`);
       setRosterText(values.join("\n"));
-      setRosterNote(`Read ${values.length} rows from the “${rollHeader}” column of ${file.name}. Now deal the questions.`);
+      // Dealing is the default, not a second step: an uploaded roster is dealt
+      // at once, randomly and evenly, and the teacher overrides what they like.
+      deal(values.join("\n"));
+      setRosterNote(`Read ${values.length} rows from the “${rollHeader}” column of ${file.name} and dealt the questions.`);
     } catch (err) {
       setRosterNote(`Could not read the file: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  /** One roll's hand changed by hand; the row is marked so a re-deal warns. */
+  /**
+   * One roll's hand changed by hand; the row is marked so a re-deal warns.
+   * The write goes through setAllottedQid, which pads a hand that is shorter
+   * than the slot being set — a roll dealt nothing used to swallow every pick
+   * silently and snap back to "— no question —".
+   */
   function overrideQid(roll: string, slot: number, qid: string) {
-    setAllotment((prev) =>
-      prev
-        ? {
-            ...prev,
-            entries: prev.entries.map((e) =>
-              e.roll === roll ? { ...e, qids: e.qids.map((old, j) => (j === slot ? qid : old)), manual: true } : e
-            ),
-          }
-        : prev
-    );
+    const per = Math.max(1, Math.floor(Number(perStudent)) || 1);
+    setAllotment((prev) => (prev ? setAllottedQid(prev, roll, slot, qid, per) : prev));
     setPlan(null);
+  }
+
+  /**
+   * Deal a question into every empty slot without touching the hands that are
+   * already filled — the repair for a roster grown after the deal, or for a
+   * pick that was never made.
+   */
+  function fillGaps() {
+    const per = Math.max(1, Math.floor(Number(perStudent)) || 1);
+    setAllotment((prev) => (prev ? fillAllotmentGaps(prev, rows.map((r) => r.id), newSeed(), per) : prev));
+    setPlan(null);
+  }
+
+  /** The register as a spreadsheet: roll, then one column per dealt question. */
+  function exportRegister() {
+    if (!allotment) return;
+    const stems = new Map(rows.map((r, i) => [r.id, `Q${i + 1}. ${r.text}`]));
+    const per = Math.max(1, allotment.perStudent);
+    const data = allotment.entries.map((e) => {
+      const row: Record<string, string> = { Roll: e.roll, Semester: semesterLabel(allotment.semester) };
+      for (let j = 0; j < per; j++) {
+        row[per > 1 ? `Question ${j + 1}` : "Question"] = e.qids[j] ? stems.get(e.qids[j]) ?? e.qids[j] : "— not dealt —";
+      }
+      row["Set by hand"] = e.manual ? "yes" : "";
+      return row;
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "Allotment");
+    XLSX.writeFile(wb, `allotment-${(title || "quiz").replace(/[^\w-]+/g, "-").slice(0, 40)}.xlsx`);
   }
 
   if (loading) return <main className="mx-auto max-w-3xl px-6 py-24 text-center text-slate-400">Loading…</main>;
@@ -912,7 +944,7 @@ export default function EditQuizPage() {
                 />
               </label>
               <button
-                onClick={deal}
+                onClick={() => deal()}
                 className="rounded-lg bg-blue-700 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-800"
               >
                 {allotment ? "Deal again" : "Deal questions"}
@@ -925,7 +957,17 @@ export default function EditQuizPage() {
           {allotment && (() => {
             const stems = new Map(rows.map((r, i) => [r.id, `Q${i + 1}. ${r.text}`]));
             const cov = allotmentCoverage(allotment, rows as Question[]);
-            const per = allotment.perStudent;
+            // The dropdowns show as many slots as the box says, so a roll dealt
+            // fewer keeps empty slots to fill rather than none to click.
+            const per = Math.max(1, Math.floor(Number(perStudent)) || 1, allotment.perStudent);
+            const needle = registerFilter.trim().toLowerCase();
+            const shown = needle
+              ? allotment.entries.filter(
+                  (e) =>
+                    e.roll.includes(needle) ||
+                    e.qids.some((qid) => (stems.get(qid) ?? "").toLowerCase().includes(needle))
+                )
+              : allotment.entries;
             return (
               <div className="space-y-2">
                 <p className="text-xs text-slate-600">
@@ -938,7 +980,39 @@ export default function EditQuizPage() {
                   {cov.unassigned.length > 0 && (
                     <span className="font-semibold text-red-700"> · {cov.unassigned.length} roll{cov.unassigned.length === 1 ? "" : "s"} with no question</span>
                   )}
+                  {cov.incomplete.length > cov.unassigned.length && (
+                    <span className="font-semibold text-red-700">
+                      {" "}· {cov.incomplete.length - cov.unassigned.length} part-dealt
+                    </span>
+                  )}
                 </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    value={registerFilter}
+                    onChange={(e) => setRegisterFilter(e.target.value)}
+                    placeholder="Find a roll number or a question…"
+                    className="w-56 rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-900"
+                  />
+                  {cov.incomplete.length > 0 && (
+                    <button
+                      onClick={fillGaps}
+                      className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100"
+                    >
+                      Fill the {cov.incomplete.length} empty slot{cov.incomplete.length === 1 ? "" : "s"} evenly
+                    </button>
+                  )}
+                  <button
+                    onClick={exportRegister}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Export the register (.xlsx)
+                  </button>
+                  {needle && (
+                    <span className="text-xs text-slate-500">
+                      {shown.length} of {cov.rosterSize} shown
+                    </span>
+                  )}
+                </div>
                 <div className="max-h-96 overflow-auto rounded-xl border border-slate-200">
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-slate-50 text-left text-xs text-slate-500">
@@ -948,7 +1022,7 @@ export default function EditQuizPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {allotment.entries.map((e) => (
+                      {shown.map((e) => (
                         <tr key={e.roll} className="border-t border-slate-100 align-top">
                           <td className="px-3 py-2 font-semibold text-slate-900">
                             {e.roll}
@@ -958,12 +1032,17 @@ export default function EditQuizPage() {
                             <div className="space-y-1">
                               {Array.from({ length: per }, (_, j) => (
                                 <select
-                                  key={j}
+                                  key={`${e.roll}-${j}`}
                                   value={e.qids[j] ?? ""}
                                   onChange={(ev) => overrideQid(e.roll, j, ev.target.value)}
-                                  className="w-full max-w-xl truncate rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+                                  className={`w-full max-w-xl truncate rounded-lg border bg-white px-2 py-1 text-xs ${
+                                    e.qids[j] ? "border-slate-200 text-slate-700" : "border-red-300 text-red-700"
+                                  }`}
                                 >
-                                  {!e.qids[j] && <option value="">— no question —</option>}
+                                  {/* Always rendered, never conditional: an option list that
+                                      changes length as the value changes is how a select ends
+                                      up showing something other than what was clicked. */}
+                                  <option value="">— no question —</option>
                                   {rows.map((r) => (
                                     <option key={r.id} value={r.id}>{stems.get(r.id)?.slice(0, 110)}</option>
                                   ))}
@@ -977,8 +1056,9 @@ export default function EditQuizPage() {
                   </table>
                 </div>
                 <p className="text-xs text-slate-500">
-                  Change any row by hand with its dropdown — the row is then kept out of automatic re-deals until you
-                  deal again. Nothing here is stored until you save.
+                  Questions are dealt at random and spread as evenly as the bank allows. Change any row by hand with
+                  its dropdown — the row is then marked “edited” and kept out of automatic re-deals until you deal
+                  again. A row outlined in red has an empty slot. Nothing here is stored until you save.
                 </p>
               </div>
             );

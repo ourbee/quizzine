@@ -113,8 +113,10 @@ export function normalizeAllotment(raw: unknown, validQids?: Set<string>): Allot
     const roll = normRoll(e.roll);
     if (!roll || seen.has(roll)) continue;
     seen.add(roll);
+    // Empty strings are the editor's "no question yet" hole; they never
+    // survive into a stored allotment.
     const qids = (Array.isArray(e.qids) ? e.qids : []).filter(
-      (id): id is string => typeof id === "string" && (!validQids || validQids.has(id))
+      (id): id is string => typeof id === "string" && id.length > 0 && (!validQids || validQids.has(id))
     );
     entries.push({ roll, qids: [...new Set(qids)], ...(e.manual ? { manual: true } : {}) });
   }
@@ -137,6 +139,8 @@ export interface AllotmentCoverage {
   rosterSize: number;
   /** Rolls with no dealt question — the guardrail that blocks opening. */
   unassigned: string[];
+  /** Rolls dealt fewer questions than `perStudent` (unassigned ones included). */
+  incomplete: string[];
   /** How many times each question in the bank is used (0 for unused ones). */
   usage: Map<string, number>;
   /** Questions dealt to more than one student. */
@@ -148,9 +152,14 @@ export interface AllotmentCoverage {
 export function allotmentCoverage(allotment: Allotment, questions: Question[]): AllotmentCoverage {
   const usage = new Map<string, number>(questions.map((q) => [q.id, 0]));
   const unassigned: string[] = [];
+  const incomplete: string[] = [];
   for (const e of allotment.entries) {
-    if (!e.qids.length) unassigned.push(e.roll);
-    for (const id of e.qids) usage.set(id, (usage.get(id) ?? 0) + 1);
+    // The editor leaves "" in a slot the teacher has not filled yet; those are
+    // holes, not questions, so nothing here may count them as dealt.
+    const dealt = e.qids.filter(Boolean);
+    if (!dealt.length) unassigned.push(e.roll);
+    if (dealt.length < allotment.perStudent) incomplete.push(e.roll);
+    for (const id of dealt) usage.set(id, (usage.get(id) ?? 0) + 1);
   }
   let reused = 0;
   let unused = 0;
@@ -158,7 +167,7 @@ export function allotmentCoverage(allotment: Allotment, questions: Question[]): 
     if (n > 1) reused++;
     if (n === 0) unused++;
   }
-  return { rosterSize: allotment.entries.length, unassigned, usage, reused, unused };
+  return { rosterSize: allotment.entries.length, unassigned, incomplete, usage, reused, unused };
 }
 
 /**
@@ -172,7 +181,9 @@ export function allotmentProblems(allotment: Allotment | null, questions: Questi
     return problems;
   }
   const valid = new Set(questions.map((q) => q.id));
-  const broken = allotment.entries.filter((e) => !e.qids.length || e.qids.some((id) => !valid.has(id)));
+  const broken = allotment.entries.filter(
+    (e) => !e.qids.filter(Boolean).length || e.qids.some((id) => !id || !valid.has(id))
+  );
   if (broken.length) {
     const rolls = broken.map((e) => e.roll);
     const shown = rolls.slice(0, 8).join(", ");
@@ -183,4 +194,92 @@ export function allotmentProblems(allotment: Allotment | null, questions: Questi
     );
   }
   return problems;
+}
+
+/**
+ * Set one slot of one roll's hand, returning a new allotment.
+ *
+ * This exists because the obvious `qids.map((old, j) => ...)` cannot write a
+ * slot that does not exist yet: a roll dealt nothing has an empty array, so
+ * every hand-picked question for it was silently dropped and the row snapped
+ * back to "— no question —". The hand is padded with "" holes to the width the
+ * editor is showing, so slot indices always line up with the dropdowns.
+ *
+ * A question already sitting in another slot of the same hand is swapped with
+ * the one being replaced, so no student is ever dealt the same question twice.
+ * Passing an empty `qid` clears the slot.
+ */
+export function setAllottedQid(
+  allotment: Allotment,
+  roll: string,
+  slot: number,
+  qid: string,
+  perStudent = allotment.perStudent
+): Allotment {
+  const norm = normRoll(roll);
+  const width = Math.max(1, perStudent, slot + 1);
+  return {
+    ...allotment,
+    entries: allotment.entries.map((e) => {
+      if (e.roll !== norm) return e;
+      const qids = Array.from({ length: width }, (_, j) => e.qids[j] ?? "");
+      const previous = qids[slot] ?? "";
+      if (qid) {
+        const clash = qids.findIndex((id, j) => j !== slot && id === qid);
+        if (clash >= 0) qids[clash] = previous;
+      }
+      qids[slot] = qid;
+      return { ...e, qids, manual: true };
+    }),
+  };
+}
+
+/**
+ * Deal a question into every empty slot, spreading the bank as evenly as the
+ * arithmetic allows: each hole takes the least-used question the student does
+ * not already hold. Hands the teacher set by hand are left exactly as they are,
+ * which is what makes this safe to run after an edit rather than only on a
+ * fresh deal. Returns a new allotment.
+ */
+export function fillAllotmentGaps(
+  allotment: Allotment,
+  bankQids: string[],
+  seed: string,
+  perStudent = allotment.perStudent
+): Allotment {
+  if (!bankQids.length) return allotment;
+  const width = Math.max(1, perStudent);
+  const order = seededShuffle(bankQids, hashSeed(seed || allotment.seed || "fill"));
+  const usage = new Map<string, number>(order.map((id) => [id, 0]));
+  for (const e of allotment.entries) {
+    for (const id of e.qids) if (id && usage.has(id)) usage.set(id, (usage.get(id) ?? 0) + 1);
+  }
+  return {
+    ...allotment,
+    entries: allotment.entries.map((e) => {
+      const qids = Array.from({ length: Math.max(width, e.qids.length) }, (_, j) => e.qids[j] ?? "");
+      if (qids.every(Boolean)) return { ...e, qids };
+      const held = new Set(qids.filter(Boolean));
+      for (let j = 0; j < qids.length; j++) {
+        if (qids[j]) continue;
+        // Least used first, the shuffled order breaking ties so two runs of a
+        // flat bank do not both start at the same question.
+        let pick = "";
+        let best = Infinity;
+        for (const id of order) {
+          if (held.has(id)) continue;
+          const n = usage.get(id) ?? 0;
+          if (n < best) {
+            best = n;
+            pick = id;
+          }
+        }
+        if (!pick) break;
+        qids[j] = pick;
+        held.add(pick);
+        usage.set(pick, (usage.get(pick) ?? 0) + 1);
+      }
+      return { ...e, qids };
+    }),
+  };
 }

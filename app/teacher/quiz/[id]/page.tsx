@@ -59,6 +59,7 @@ export default function QuizDetailPage() {
   const [qr, setQr] = useState("");
   const [showQr, setShowQr] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [registerFilter, setRegisterFilter] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -136,7 +137,16 @@ export default function QuizDetailPage() {
     if (!a) return null;
     const submitted = new Set(attempts.map((at) => at.student.rollNorm));
     const missing = a.entries.filter((e) => !submitted.has(e.roll)).map((e) => e.roll);
-    return { semester: a.semester, rosterSize: a.entries.length, missing };
+    // The register itself, so the teacher can see who holds which question
+    // without opening the editor and risking an accidental edit.
+    const stems = new Map(quiz.questions.map((qn, i) => [qn.id, `Q${i + 1}. ${qn.text}`]));
+    const register = a.entries.map((e) => ({
+      roll: e.roll,
+      manual: !!e.manual,
+      submitted: submitted.has(e.roll),
+      questions: e.qids.map((qid) => stems.get(qid) ?? "— not dealt —"),
+    }));
+    return { semester: a.semester, rosterSize: a.entries.length, missing, register };
   }, [quiz, attempts, allotted]);
 
   // A quiz with nothing to score has no meaningful average. A peer-reviewed or
@@ -177,6 +187,23 @@ export default function QuizDetailPage() {
     if (!confirm(`Delete "${quiz.title}" and all ${attempts.length} responses? This cannot be undone.`)) return;
     await fetch(`/api/quizzes/${quiz.id}`, { method: "DELETE" });
     router.push("/teacher");
+  }
+
+  /** The allotment register as a spreadsheet: roll, question(s), submitted. */
+  function exportRegister() {
+    if (!quiz || !allotmentInfo) return;
+    const wide = allotmentInfo.register.some((r) => r.questions.length > 1);
+    const data = allotmentInfo.register.map((r) => {
+      const row: Record<string, string> = { Roll: r.roll, Semester: semesterLabel(allotmentInfo.semester) };
+      if (wide) r.questions.forEach((q, i) => (row[`Question ${i + 1}`] = q));
+      else row.Question = r.questions[0] ?? "— not dealt —";
+      row["Set by hand"] = r.manual ? "yes" : "";
+      row.Submitted = r.submitted ? "yes" : "no";
+      return row;
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "Allotment");
+    XLSX.writeFile(wb, `allotment-${(quiz.title || "quiz").replace(/[^\w-]+/g, "-").slice(0, 40)}.xlsx`);
   }
 
   function exportXlsx() {
@@ -361,6 +388,80 @@ export default function QuizDetailPage() {
           ) : (
             attempts.length > 0 && <p className="mt-1 text-sm text-green-700">Everyone on the roster is in. 🎉</p>
           )}
+          <details className="mt-2">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-700">
+              Who was dealt what — the allotment register
+            </summary>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                value={registerFilter}
+                onChange={(e) => setRegisterFilter(e.target.value)}
+                placeholder="Find a roll number or a question…"
+                className="w-56 rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-900"
+              />
+              <button
+                onClick={exportRegister}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Export the register (.xlsx)
+              </button>
+              <Link
+                href={`/teacher/quiz/${quiz.id}/edit#allotment`}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Change the allotment
+              </Link>
+            </div>
+            <div className="mt-2 max-h-96 overflow-auto rounded-xl border border-slate-200">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-50 text-left text-xs text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">Roll</th>
+                    <th className="px-3 py-2">Question{allotmentInfo.register.some((r) => r.questions.length > 1) ? "s" : ""} dealt</th>
+                    <th className="px-3 py-2">Submitted</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allotmentInfo.register
+                    .filter((r) => {
+                      const needle = registerFilter.trim().toLowerCase();
+                      if (!needle) return true;
+                      return r.roll.includes(needle) || r.questions.some((q) => q.toLowerCase().includes(needle));
+                    })
+                    .map((r) => (
+                      <tr key={r.roll} className="border-t border-slate-100 align-top">
+                        <td className="px-3 py-2 font-semibold text-slate-900">
+                          {r.roll}
+                          {r.manual && (
+                            <span className="ml-1.5 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-800">
+                              set by hand
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-slate-700">
+                          {r.questions.length ? (
+                            r.questions.map((q, i) => (
+                              <p key={i} className="truncate">
+                                {q}
+                              </p>
+                            ))
+                          ) : (
+                            <span className="font-semibold text-red-700">— not dealt —</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-xs">
+                          {r.submitted ? (
+                            <span className="text-green-700">yes</span>
+                          ) : (
+                            <span className="text-slate-400">not yet</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
         </div>
       )}
 
