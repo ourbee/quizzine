@@ -15,7 +15,7 @@ import { looksLikeAppsScript, parseAppsScript } from "@/lib/appsscript";
 import { validateQuestions } from "@/lib/validate";
 import { correctKeysOf, groupByPassage, isGraded } from "@/lib/questions";
 import { DEFAULT_PEER_CONFIG, peerMaxScore, type PeerConfig } from "@/lib/peer";
-import { aiPrompt } from "@/lib/aiprompt";
+import { aiPrompt, templateBrief } from "@/lib/aiprompt";
 import { DEFAULT_MST, mstCapacity, type MstConfig } from "@/lib/mst";
 import {
   TAG_PRESETS,
@@ -77,7 +77,11 @@ interface PublishResult {
 
 /** Whose paper this is: one paper for the class, or one question per roll. */
 type PaperType = "same" | "allotted";
-/** The three ways questions arrive; remembered so a repeat visit opens the right card. */
+/**
+ * The three ways questions arrive; remembered so a repeat visit opens the right
+ * card. `null` is a real state: every card may be shut, which is how a teacher
+ * who knows the screen gets all three doors in view at once.
+ */
 type IntakePath = "ai" | "upload" | "scratch";
 const PATH_KEY = "quizzine-intake-path";
 
@@ -193,7 +197,7 @@ function looksLikeSurvey(parsed: ParsedQuiz): boolean {
 export default function NewQuizPage() {
   const [step, setStep] = useState<Step>("intake");
   const [paperType, setPaperType] = useState<PaperType>("same");
-  const [path, setPath] = useState<IntakePath>("ai");
+  const [path, setPath] = useState<IntakePath | null>("scratch");
   const [tab, setTab] = useState<"upload" | "paste">("paste");
   const [pasted, setPasted] = useState("");
   const [showPrompt, setShowPrompt] = useState(false);
@@ -260,13 +264,17 @@ export default function NewQuizPage() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(PATH_KEY);
-      if (saved === "ai" || saved === "upload" || saved === "scratch") setPath(saved);
+      if (saved === "ai" || saved === "upload" || saved === "scratch" || saved === "none") {
+        setPath(saved === "none" ? null : saved);
+      }
     } catch {}
   }, []);
+  /** Clicking the card you are already on shuts it, rather than doing nothing. */
   function choosePath(next: IntakePath) {
-    setPath(next);
+    const value = path === next ? null : next;
+    setPath(value);
     try {
-      localStorage.setItem(PATH_KEY, next);
+      localStorage.setItem(PATH_KEY, value ?? "none");
     } catch {}
   }
 
@@ -534,6 +542,25 @@ export default function NewQuizPage() {
     const ws = XLSX.utils.json_to_sheet(TEMPLATE_ROWS, { header: TEMPLATE_HEADERS });
     ws["!cols"] = TEMPLATE_HEADERS.map((h) => ({ wch: h === "Question" || h.startsWith("Feedback") ? 40 : 14 }));
     const wb = XLSX.utils.book_new();
+
+    const chosen = findPreset(preset);
+    const known = buildVocabulary([...vocabulary, ...(chosen ? presetTags(chosen) : [])]).tags;
+
+    /*
+     * The brief, first, so it is the sheet the workbook opens on and the first
+     * thing any model reading the file meets. A teacher who never opens this
+     * sheet loses nothing; a teacher who hands the file to ChatGPT no longer
+     * has to explain what Quizzine wants.
+     */
+    const briefSheet = XLSX.utils.json_to_sheet(
+      templateBrief(known.length > 0)
+        .split("\n")
+        .map((line) => ({ "Quizzine — instructions for you or your AI": line })),
+      { header: ["Quizzine — instructions for you or your AI"] }
+    );
+    briefSheet["!cols"] = [{ wch: 120 }];
+    XLSX.utils.book_append_sheet(wb, briefSheet, "Start here");
+
     XLSX.utils.book_append_sheet(wb, ws, "Questions");
 
     /*
@@ -543,8 +570,6 @@ export default function NewQuizPage() {
      * put the vocabulary in the file. (A real dropdown would be better still,
      * but data validation is not something this spreadsheet writer can emit.)
      */
-    const chosen = findPreset(preset);
-    const known = buildVocabulary([...vocabulary, ...(chosen ? presetTags(chosen) : [])]).tags;
     const rows = [
       { Tag: "HOW TO WRITE A TAG", Notes: "Dimension: Value — several tags in one cell, separated by semicolons." },
       { Tag: "Period: Victorian; Genre: Poetry", Notes: "A complete Tags cell looks like this." },
@@ -839,8 +864,37 @@ export default function NewQuizPage() {
           {/* ---------- zone 2: how questions arrive ---------- */}
           <p className="text-sm font-semibold text-slate-900">How do you want to add questions?</p>
 
+          <div className={`rounded-xl border p-4 ${path === "scratch" ? "border-slate-400 bg-white" : "border-slate-200 bg-white"}`}>
+            {cardHeader("scratch", "✏️ Write your own questions", "type them into the editor here, one at a time")}
+            {path === "scratch" && (
+              <div className="mt-4">
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      ["mcq", "Multiple choice"],
+                      ["written", "Written answers"],
+                      ["poll", "Poll"],
+                    ] as ["mcq" | "written" | "poll", string][]
+                  ).map(([kind, label]) => (
+                    <button
+                      key={kind}
+                      onClick={() => startFromScratch(kind)}
+                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  One question of that kind opens straight in the editor. Add as many more as you like there, and change
+                  any question&rsquo;s type as you go.
+                </p>
+              </div>
+            )}
+          </div>
+
           <div className={`rounded-xl border p-4 ${path === "ai" ? "border-blue-300 bg-blue-50/40" : "border-slate-200 bg-white"}`}>
-            {cardHeader("ai", "✨ Build with AI", "recommended — ChatGPT, Claude or Gemini writes the file, you review it here")}
+            {cardHeader("ai", "✨ Create Exam with AI", "recommended — ChatGPT, Claude or Gemini writes the file, you review it here")}
             {path === "ai" && (
               <ol className="mt-4 space-y-4">
                 <li className="flex gap-3">
@@ -859,26 +913,43 @@ export default function NewQuizPage() {
                       <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-white border border-slate-200 p-3 text-xs whitespace-pre-wrap text-slate-700">{aiPrompt(preset || null, vocabulary, paperType === "allotted")}</pre>
                     )}
                     <details className="mt-2">
-                      <summary className="cursor-pointer text-xs font-semibold text-slate-600">Options — tag vocabulary</summary>
+                      <summary className="cursor-pointer text-xs font-semibold text-slate-600">How should questions be tagged?</summary>
                       <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3">
-                        <label className="block text-sm font-semibold text-slate-800">
+                        <p className="text-xs text-slate-600">
+                          A tag vocabulary is the fixed set of words every question gets labelled with — the periods,
+                          genres, units or skills you teach. Naming one here writes it into the prompt, so the AI uses
+                          the same words on every quiz. That is what lets the strengths report pool a whole term into
+                          one picture instead of splitting each topic across near-identical spellings.
+                        </p>
+                        <label className="mt-3 block text-sm font-semibold text-slate-800">
                           Tag vocabulary
                           <select
                             value={preset}
                             onChange={(e) => setPreset(e.target.value)}
                             className="ml-2 rounded-lg border border-slate-300 px-2 py-1.5 text-sm font-normal text-slate-900"
                           >
-                            <option value="">No fixed list</option>
+                            <option value="">No fixed list — let the AI propose one</option>
                             {TAG_PRESETS.map((p) => (
-                              <option key={p.id} value={p.id}>{p.name}</option>
+                              <option key={p.id} value={p.id}>
+                                {p.name} — {p.description}
+                              </option>
                             ))}
                           </select>
                         </label>
-                        <p className="mt-2 text-xs text-slate-500">
+                        {/* What the current choice actually means, spelled out — the
+                            <select> row itself is truncated on a narrow screen. */}
+                        <p className="mt-2 text-xs text-slate-600">
                           {preset
-                            ? "The prompt now names this list, so the AI tags every question with the same words each time — which is what lets the strengths and weaknesses report pool five quizzes into one picture."
-                            : "Pick a list and it is written into the prompt, so the AI tags your questions with the same words every time. Without one you can still tag freely, but you keep the spellings consistent yourself."}
+                            ? `Every question will be tagged from the ${findPreset(preset)?.name} list, so this quiz can be pooled with every other one that uses it.`
+                            : "The AI will propose a vocabulary for your subject in its first reply, for you to approve. Choose this the first time; afterwards, reuse what you approved so your quizzes stay comparable."}
                         </p>
+                        {vocabulary.length > 0 && (
+                          <p className="mt-2 text-xs text-slate-500">
+                            Either way, the {vocabulary.length} tag{vocabulary.length === 1 ? "" : "s"} your earlier
+                            quizzes already use are listed in the prompt, with instructions to reuse them rather than
+                            invent near-copies.
+                          </p>
+                        )}
                       </div>
                     </details>
                   </div>
@@ -889,7 +960,8 @@ export default function NewQuizPage() {
                     <p className="text-sm font-semibold text-slate-900">Chat</p>
                     <p className="mt-1 text-sm text-slate-600">
                       Paste it into ChatGPT, Claude or Gemini with your brief and any source material. It will ask about
-                      anything you left open — question types, level, marking — then return a quiz file.
+                      anything you left open — the topic or text, question types, level, marking — then return a quiz
+                      file.
                     </p>
                   </div>
                 </li>
@@ -914,9 +986,40 @@ export default function NewQuizPage() {
           </div>
 
           <div className={`rounded-xl border p-4 ${path === "upload" ? "border-slate-300 bg-white" : "border-slate-200 bg-white"}`}>
-            {cardHeader("upload", "📄 Upload a file I already have", "a spreadsheet, JSON, text file or Google Forms Apps Script")}
+            {cardHeader("upload", "📄 Upload a file with questions", "a spreadsheet, JSON, text file, or a Google Forms Apps Script")}
             {path === "upload" && (
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 space-y-4">
+                <ol className="space-y-2.5 text-sm text-slate-700">
+                  <li className="flex gap-2">
+                    <span className="font-bold text-slate-400">1.</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="font-semibold text-slate-900">Get the template.</span>
+                      <button
+                        onClick={downloadTemplate}
+                        className="ml-2 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                      >
+                        Download Excel template
+                      </button>
+                    </span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="font-bold text-slate-400">2.</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="font-semibold text-slate-900">Fill it in.</span> Type the questions in yourself —
+                      or attach the template to ChatGPT, Claude or Gemini along with your topic, your source material,
+                      or a PDF or photo of questions you already have, and ask it to fill the template in. The template
+                      carries its own instructions, so the AI needs nothing else from you.
+                    </span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="font-bold text-slate-400">3.</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="font-semibold text-slate-900">Drop the finished file below.</span> You review
+                      every question on the next screen before anything is published.
+                    </span>
+                  </li>
+                </ol>
+
                 {dropZone}
                 {feedback}
                 <div className="flex gap-2 text-xs font-semibold">
@@ -930,40 +1033,9 @@ export default function NewQuizPage() {
                   </>
                 )}
                 <p className="text-xs text-slate-500">
-                  Already built quizzes for Google Forms? Upload the Apps Script file (.gs or .js) as it is — every form
-                  it builds becomes a quiz here. A workbook with several sheets works the same way: one quiz per sheet.
-                </p>
-                <button onClick={downloadTemplate} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">
-                  Download Excel template
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            {cardHeader("scratch", "✏️ Start from scratch", "write questions in the editor, one at a time")}
-            {path === "scratch" && (
-              <div className="mt-4">
-                <div className="flex flex-wrap gap-2">
-                  {(
-                    [
-                      ["mcq", "Multiple choice"],
-                      ["written", "Written answers"],
-                      ["poll", "Poll"],
-                    ] as ["mcq" | "written" | "poll", string][]
-                  ).map(([kind, label]) => (
-                    <button
-                      key={kind}
-                      onClick={() => startFromScratch(kind)}
-                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <p className="mt-2 text-xs text-slate-500">
-                  One question of that kind opens straight in the editor. Add as many more as you like there, and change
-                  any question&rsquo;s type as you go.
+                  The template is not the only thing accepted here: JSON, plain text, and Google Forms Apps Script files
+                  (.gs or .js) are read as they are — every form the script builds becomes a quiz. A workbook with
+                  several sheets works the same way: one quiz per sheet.
                 </p>
               </div>
             )}
