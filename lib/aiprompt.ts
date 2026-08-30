@@ -5,6 +5,62 @@
 
 import { TAG_PRESETS, difficultyLabel, findPreset, type TagPreset } from "./tags.ts";
 
+/*
+ * The parts of the brief that must read identically wherever a model meets
+ * them — in the prompt a teacher copies, and in the "Start here" sheet inside
+ * the Excel template. They are defined once here and spliced into both, so a
+ * rule tightened in one place cannot go on being wrong in the other.
+ */
+
+/** What to ask the teacher about before writing a single question. */
+export const CHECKLIST = `1. Topic or source. What exactly is the quiz on? If I attached material, is it the only source, or may you use general knowledge too? If I named a broad subject, which sub-topics should it cover?
+2. Number of questions. Ask if I have not given a number.
+3. Question types. mcq only? A mix? Any typed answers (short/essay)? This is the one teachers most often forget — ask unless I have said.
+4. How answers are marked. A scored quiz, an unscored survey or opinion poll, work I intend to have peer reviewed, or written answers I will mark against a rubric? Ask if my brief could mean more than one of these.
+5. Student level. Which class, year or semester, and roughly what difficulty?
+6. Coverage and balance, when it matters. How to split the questions across topics, or how many of each type.
+7. Tagging. Which dimensions should each question be tagged under (period, genre, author, skill, unit, and so on), and should every question carry a difficulty? Ask if I have not said, unless the TAGGING section below already names a fixed list.
+8. Anything else genuinely ambiguous in what I wrote — an unclear instruction, a contradiction, a term that could mean two things.`;
+
+/** The Type column's vocabulary. */
+export const QUESTION_TYPES = `- "mcq" — one correct answer, auto-graded.
+- "multi" — SEVERAL correct answers, auto-graded; the student ticks all that apply. Put every correct letter in CorrectAnswer, comma-separated: A,C
+- "short" / "essay" — typed answers I mark myself later, against a rubric. Skip options and CorrectAnswer. For EVERY one of these you must give:
+  * ModelAnswer — a full answer of the quality that would earn top marks at the level I named. Write it as an answer, not as instructions to the student: it is what I mark against and what students read afterwards.
+  * WordLimit — a sensible length for the answer, as a whole number of words (e.g. 150). "short" is usually 40-120 words, "essay" usually 200-500. Judge it from what the question actually asks for.
+- "poll" — a choice question with NO correct answer (opinion, preference, self-report). Give the options; leave CorrectAnswer empty. Never invent a "right" opinion.
+- "open" — a typed question with NO correct answer (reflection, comment, work to be peer-reviewed). Leave options and CorrectAnswer empty.
+Use "poll" and "open" for anything I describe as a survey, opinion poll, reflection, feedback form, or peer-review task. If I ask for a survey, EVERY question must be "poll" or "open" and no CorrectAnswer may appear anywhere.`;
+
+/** What separates a usable question from a plausible-looking one. */
+export const QUALITY_RULES = `1. Every "mcq" must have exactly one defensible correct answer; every "multi" must have at least two correct answers and at least one wrong one. "poll" and "open" questions have no correct answer at all — do not supply one.
+2. Provide feedback for EVERY option (A, B, C and D) on graded questions — for correct options explain why they are right; for each wrong option explain the specific misunderstanding that makes it wrong. Poll options need no feedback.
+3. Feedback must be SELF-CONTAINED and ANONYMISED: never mention the source material, attachment, book, passage, study guide, website, or page numbers. Write "The novel was published in 1967", never "The source/LitChart/passage says 1967". The one exception is material you put in the Passage column: the student can see that, so questions and feedback may refer to it ("in the extract above").
+4. Never refer to options by letter or position in any feedback or question text ("option C", "the third option", "both A and B") — options are shuffled for every student, so letters are meaningless to them. Refer to the option's content instead.
+5. No "All of the above", "None of the above", or negative/meta options. If you want several answers to count, use type "multi" instead.
+6. Distractors must be plausible; keep all options similar in length and grammatical form.
+7. Balance the answer key roughly evenly across A–D.
+8. If I attached source material, base every question strictly on it and do not invent facts — but write questions and feedback so they stand alone without it.
+9. MediaURL is optional: a public image, audio file, or YouTube link relevant to the question.
+10. Passage is optional material the student reads BEFORE answering — a poem, an extract, a paragraph of theory, or a sample response to imitate. PassageTitle heads it ("Sample response", "Read this first", "The passage"). Leave both empty unless I ask for material or my source material only makes sense if quoted to the student. To put ONE passage in front of SEVERAL questions, repeat the identical Passage and PassageTitle text on every one of those rows, keeping them next to each other — the app shows repeated material once, above the whole run. Do not paraphrase it differently on each row or it will be shown again each time.`;
+
+/** The spreadsheet's columns, one line each. */
+export const COLUMN_GUIDE = `- Question — the question text. Required. A row with no Question is ignored.
+- Type — one of the types listed above. Leave blank and it is treated as "mcq".
+- OptionA..OptionD — the choices, for "mcq", "multi" and "poll" only. Leave empty for typed answers. (OptionE and OptionF also work if you need more than four.)
+- CorrectAnswer — LETTERS ONLY: one letter for "mcq" ("B"), several comma-separated for "multi" ("A,C"), and EMPTY for "poll", "open", "short" and "essay". Never write the option's text here.
+- FeedbackA..FeedbackD — what each option teaches, on graded choice questions.
+- Points — a positive number. Blank means 1. Leave blank on "poll" and "open", which are never scored.
+- Tags — "Dimension: Value" pairs separated by semicolons. See TAGGING below.
+- Difficulty — a whole number 1 to 5.
+- MediaURL — optional public image, audio or YouTube link.
+- Passage / PassageTitle — optional material the student reads before answering; see rule 10 below.
+- ModelAnswer — required on "short" and "essay", empty everywhere else. (On a choice question this column is the same field as general feedback for a correct answer, so leave it empty and use FeedbackA..D instead.)
+- WordLimit — a whole number of words, on "short" and "essay" only. Empty elsewhere.`;
+
+/** The header row itself, in the one order the parser expects. */
+export const COLUMN_ROW = `Question | Type | OptionA | OptionB | OptionC | OptionD | CorrectAnswer | FeedbackA | FeedbackB | FeedbackC | FeedbackD | Points | Tags | Difficulty | MediaURL | Passage | PassageTitle | ModelAnswer | WordLimit`;
+
 export const AI_PROMPT = `You are helping me, a teacher, build a quiz file for the Quizzine app. This happens in TWO steps. Do not skip step 1.
 
 STEP 1 — READ MY BRIEF, THEN ASK ME ABOUT ANYTHING UNCLEAR.
@@ -18,14 +74,7 @@ How to ask:
 - If nothing is unclear, say so in one line and go straight to step 2.
 
 CHECKLIST — ask whenever I have not made these clear:
-1. Topic or source. What exactly is the quiz on? If I attached material, is it the only source, or may you use general knowledge too? If I named a broad subject, which sub-topics should it cover?
-2. Number of questions. Ask if I have not given a number.
-3. Question types. mcq only? A mix? Any typed answers (short/essay)? This is the one teachers most often forget — ask unless I have said.
-4. How answers are marked. A scored quiz, an unscored survey or opinion poll, work I intend to have peer reviewed, or written answers I will mark against a rubric? Ask if my brief could mean more than one of these.
-5. Student level. Which class, year or semester, and roughly what difficulty?
-6. Coverage and balance, when it matters. How to split the questions across topics, or how many of each type.
-7. Tagging. Which dimensions should each question be tagged under (period, genre, author, skill, unit, and so on), and should every question carry a difficulty? Ask if I have not said, unless the TAGGING section below already names a fixed list.
-8. Anything else genuinely ambiguous in what I wrote — an unclear instruction, a contradiction, a term that could mean two things.
+${CHECKLIST}
 
 If I say "you decide", "use your judgement", "no questions", or "just produce it", skip the questions entirely and go to step 2 using sensible choices and the defaults.
 
@@ -53,26 +102,10 @@ MY BRIEF (anything I leave blank or vague is something to ask about in step 1):
 - Number of quizzes: [leave blank for 1 — or e.g. "5 quizzes, one per theme". For several quizzes use format A with one SHEET per quiz (sheet name = quiz title), or format D with one Google Form per quiz.]
 
 QUESTION TYPES:
-- "mcq" — one correct answer, auto-graded.
-- "multi" — SEVERAL correct answers, auto-graded; the student ticks all that apply. Put every correct letter in CorrectAnswer, comma-separated: A,C
-- "short" / "essay" — typed answers I mark myself later, against a rubric. Skip options and CorrectAnswer. For EVERY one of these you must give:
-  * ModelAnswer — a full answer of the quality that would earn top marks at the level I named. Write it as an answer, not as instructions to the student: it is what I mark against and what students read afterwards.
-  * WordLimit — a sensible length for the answer, as a whole number of words (e.g. 150). "short" is usually 40-120 words, "essay" usually 200-500. Judge it from what the question actually asks for.
-- "poll" — a choice question with NO correct answer (opinion, preference, self-report). Give the options; leave CorrectAnswer empty. Never invent a "right" opinion.
-- "open" — a typed question with NO correct answer (reflection, comment, work to be peer-reviewed). Leave options and CorrectAnswer empty.
-Use "poll" and "open" for anything I describe as a survey, opinion poll, reflection, feedback form, or peer-review task. If I ask for a survey, EVERY question must be "poll" or "open" and no CorrectAnswer may appear anywhere.
+${QUESTION_TYPES}
 
 QUALITY RULES (mandatory):
-1. Every "mcq" must have exactly one defensible correct answer; every "multi" must have at least two correct answers and at least one wrong one. "poll" and "open" questions have no correct answer at all — do not supply one.
-2. Provide feedback for EVERY option (A, B, C and D) on graded questions — for correct options explain why they are right; for each wrong option explain the specific misunderstanding that makes it wrong. Poll options need no feedback.
-3. Feedback must be SELF-CONTAINED and ANONYMISED: never mention the source material, attachment, book, passage, study guide, website, or page numbers. Write "The novel was published in 1967", never "The source/LitChart/passage says 1967". The one exception is material you put in the Passage column: the student can see that, so questions and feedback may refer to it ("in the extract above").
-4. Never refer to options by letter or position in any feedback or question text ("option C", "the third option", "both A and B") — options are shuffled for every student, so letters are meaningless to them. Refer to the option's content instead.
-5. No "All of the above", "None of the above", or negative/meta options. If you want several answers to count, use type "multi" instead.
-6. Distractors must be plausible; keep all options similar in length and grammatical form.
-7. Balance the answer key roughly evenly across A–D.
-8. If I attached source material, base every question strictly on it and do not invent facts — but write questions and feedback so they stand alone without it.
-9. MediaURL is optional: a public image, audio file, or YouTube link relevant to the question.
-10. Passage is optional material the student reads BEFORE answering — a poem, an extract, a paragraph of theory, or a sample response to imitate. PassageTitle heads it ("Sample response", "Read this first", "The passage"). Leave both empty unless I ask for material or my source material only makes sense if quoted to the student. To put ONE passage in front of SEVERAL questions, repeat the identical Passage and PassageTitle text on every one of those rows, keeping them next to each other — the app shows repeated material once, above the whole run. Do not paraphrase it differently on each row or it will be shown again each time.
+${QUALITY_RULES}
 
 TAGGING (this is what makes the strengths-and-weaknesses report work — do not skip it):
 
@@ -100,21 +133,10 @@ Difficulty is a whole number from 1 to 5: 1 very easy, 2 easy, 3 medium, 4 diffi
 OUTPUT FORMATS:
 
 FORMAT A — Excel/CSV. THIS IS THE DEFAULT: use it unless I have explicitly named another format. A table with EXACTLY these columns, one row per question:
-Question | Type | OptionA | OptionB | OptionC | OptionD | CorrectAnswer | FeedbackA | FeedbackB | FeedbackC | FeedbackD | Points | Tags | Difficulty | MediaURL | Passage | PassageTitle | ModelAnswer | WordLimit
+${COLUMN_ROW}
 
 Every column, so you never need me to send you the template file:
-- Question — the question text. Required. A row with no Question is ignored.
-- Type — one of the types listed above. Leave blank and it is treated as "mcq".
-- OptionA..OptionD — the choices, for "mcq", "multi" and "poll" only. Leave empty for typed answers. (OptionE and OptionF also work if you need more than four.)
-- CorrectAnswer — LETTERS ONLY: one letter for "mcq" ("B"), several comma-separated for "multi" ("A,C"), and EMPTY for "poll", "open", "short" and "essay". Never write the option's text here.
-- FeedbackA..FeedbackD — what each option teaches, on graded choice questions.
-- Points — a positive number. Blank means 1. Leave blank on "poll" and "open", which are never scored.
-- Tags — "Dimension: Value" pairs separated by semicolons. See TAGGING below.
-- Difficulty — a whole number 1 to 5.
-- MediaURL — optional public image, audio or YouTube link.
-- Passage / PassageTitle — optional material the student reads before answering; see rule 10 below.
-- ModelAnswer — required on "short" and "essay", empty everywhere else. (On a choice question this column is the same field as general feedback for a correct answer, so leave it empty and use FeedbackA..D instead.)
-- WordLimit — a whole number of words, on "short" and "essay" only. Empty elsewhere.
+${COLUMN_GUIDE}
 
 (Give me a downloadable .xlsx file if you can produce one — that is what I want by default. If you cannot, give me a CSV code block I can paste into a spreadsheet instead. Include every column above, in that order, even where the cells are empty. For several quizzes, put each quiz on its own sheet and name the sheet after the quiz — the app builds one quiz per sheet.)
 
@@ -242,4 +264,70 @@ ${
     }${mine}${allot}`;
   }
   return AI_PROMPT + presetPromptSection(preset) + mine + allot;
+}
+
+/**
+ * The brief that travels inside the Excel template itself, as a sheet.
+ *
+ * A teacher who drags the template into ChatGPT, Claude or Gemini has, without
+ * meaning to, given the model every sheet in the workbook. That is a free
+ * channel for the instructions that would otherwise have to be copied by hand
+ * from this app — so the template stops being a bare grid of headers and
+ * becomes a self-contained brief: what the file is for, what to ask before
+ * filling it, that a PDF or a photograph of an existing paper can be read into
+ * the rows rather than replaced by invented questions, and which spellings to
+ * take from the Tags sheet.
+ *
+ * It shares CHECKLIST, QUESTION_TYPES, QUALITY_RULES and COLUMN_GUIDE with the
+ * copy-and-paste prompt rather than restating them, because two copies of a
+ * rule is one copy that will quietly go stale.
+ *
+ * `hasVocabulary` says whether the Tags sheet ended up with real tags in it, so
+ * the brief can point at them rather than at an empty list.
+ */
+export function templateBrief(hasVocabulary: boolean): string {
+  return `QUIZZINE QUESTION TEMPLATE — READ THIS SHEET FIRST
+
+You are being shown this workbook by a teacher who wants a quiz built for the Quizzine app. This sheet tells you everything you need; the teacher does not have to explain the format to you.
+
+WHAT TO PRODUCE
+Fill in the "Questions" sheet of this workbook — the same columns, in the same order, one row per question — and give it back as an .xlsx file. If you cannot produce a file, give a CSV code block with every column below, in that order, including the empty ones. The sample rows already in that sheet show what a properly filled row looks like: copy their shape, not their content, and delete them from what you return.
+
+STEP 1 — ASK BEFORE YOU WRITE ANYTHING
+Check what the teacher has told you against the list below. If anything needed is missing, vague or ambiguous, ask — do not guess, and do not quietly choose. Put every question in ONE numbered list in one reply, offer a suggested answer for each so the teacher can reply "1b, 2 yes, 3 mix", then stop and wait. Do not write questions, a sample or a partial file while you are waiting. If nothing is unclear, say so in one line and go straight to step 2. If the teacher says "you decide" or "just produce it", skip the questions and use sensible defaults.
+
+${CHECKLIST}
+
+The first of those matters most: this template cannot tell you what the quiz is ABOUT. If the teacher has not named a topic, a syllabus area, a text, or attached source material, that is the first thing to ask.
+
+IF YOU WERE GIVEN QUESTIONS THAT ALREADY EXIST
+The teacher may attach a question paper, a PDF, a scan, a photograph of a printed paper, a Word file or a set of slides instead of a topic. In that case your job is to TRANSCRIBE, not to invent: read the questions out of what you were given — including by OCR where the file is a scan or a photograph — and put them into the rows as they stand. Keep the teacher's wording. Do not silently add questions of your own to reach a round number, do not drop a question because it is awkward to fit, and do not correct the teacher's phrasing beyond obvious typing errors. Where a page is unreadable, or an option or answer key is missing from the source, fill in what you can and list what you could not read in your reply — never fabricate a correct answer you did not find. Anything the source does not supply but the app needs (feedback for each option, tags, difficulty) you may write yourself, and you should say so.
+
+STEP 2 — FILL IN THE COLUMNS
+
+${COLUMN_ROW}
+
+${COLUMN_GUIDE}
+
+QUESTION TYPES
+${QUESTION_TYPES}
+
+QUALITY RULES (mandatory)
+${QUALITY_RULES}
+
+TAGGING
+Every question needs a Tags value and a Difficulty value: this is what makes the app's strengths-and-weaknesses report work, and a file with no tags produces no report at all.
+
+Tags say what a question is TESTING, written as "Dimension: Value" and separated by semicolons, e.g. Period: Victorian; Genre: Poetry; Skill: Close reading. Give each question 2 to 5 tags, one per dimension. A tag value may NEVER contain a comma — a comma starts a new tag.
+
+${hasVocabulary
+  ? 'The "Tags" sheet of this workbook lists the exact tags this teacher already uses. Copy them character for character wherever one fits — same capitalisation, same spacing, same punctuation. A tag that differs only in case is a new tag to the app, and it splits one topic into two half-empty buckets. Only invent a tag when none of the listed ones genuinely applies, and say in your reply which new ones you invented and why.'
+  : 'The "Tags" sheet of this workbook gives the rules for writing a tag. The teacher has no fixed vocabulary yet, so propose a short list of dimensions and values for this subject in step 1 and let them approve it — then use exactly that list, so every later quiz can be pooled with this one.'}
+
+Values are SENTENCE CASE: a capital on the first word and on proper nouns, nothing else — "Skill: Close reading", not "Skill: Close Reading". Author initials are spaced, each with a full stop: "I. A. Richards". Titles keep their own capitals and apostrophes.
+
+Difficulty is a whole number from 1 to 5 (1 very easy, 5 very difficult), judged against the level the teacher named rather than against the general population. Spread the difficulties deliberately instead of marking everything 3. Do not also write difficulty as a tag — it has its own column.
+
+FINALLY
+Use no markdown bold or italics inside any cell. Return the complete filled workbook in one reply; if the teacher asks for changes, return the complete corrected file again, never a fragment.`;
 }
