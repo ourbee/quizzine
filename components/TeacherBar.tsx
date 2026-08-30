@@ -20,8 +20,13 @@ export default function TeacherBar({
   owner,
   children,
 }: {
-  /** Where "back" goes. Pass null on the dashboard itself, which is the root. */
-  back?: { href: string; label: string } | null;
+  /**
+   * Where "back" goes. Pass null on the dashboard itself, which is the root.
+   * `confirm` guards the way out on a screen holding work that leaving would
+   * discard — an unpublished draft — and is left off everywhere else, since a
+   * dialog on a page with nothing to lose only teaches people to dismiss them.
+   */
+  back?: { href: string; label: string; confirm?: string } | null;
   /** The signed-in email, when the page has already fetched it. */
   owner?: string;
   /** Page-specific controls, shown between the two. */
@@ -38,7 +43,13 @@ export default function TeacherBar({
     <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
       <div className="flex items-center gap-3">
         {back && (
-          <Link href={back.href} className="text-slate-500 hover:text-slate-800">
+          <Link
+            href={back.href}
+            onClick={(e) => {
+              if (back.confirm && !window.confirm(back.confirm)) e.preventDefault();
+            }}
+            className="text-slate-500 hover:text-slate-800"
+          >
             {back.label}
           </Link>
         )}

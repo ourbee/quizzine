@@ -37,6 +37,13 @@ import Media from "@/components/Media";
 import PeerEditor from "@/components/PeerEditor";
 import QuestionEditor, { blankQuestion, stripEditing, toEditable, type EditableQuestion } from "@/components/QuestionEditor";
 import RubricEditor from "@/components/RubricEditor";
+import CheckRow from "@/components/settings/CheckRow";
+import ChipGroup from "@/components/settings/ChipGroup";
+import DeadlinePicker from "@/components/settings/DeadlinePicker";
+import SettingRow from "@/components/settings/SettingRow";
+import SettingsCard from "@/components/settings/SettingsCard";
+import { HELP } from "@/lib/help";
+import { fromLocalInput } from "@/lib/deadline";
 
 type Step = "intake" | "review" | "settings" | "done";
 
@@ -671,7 +678,7 @@ export default function NewQuizPage() {
       mst: !allotted && mstMode ? mst : undefined,
       maxMinutes: effectiveTimerMode === "quiz" ? Number(maxMinutes) : undefined,
       perQuestionSeconds: effectiveTimerMode === "question" ? Number(perQuestionSeconds) : undefined,
-      closesAt: closesAt ? new Date(closesAt).toISOString() : undefined,
+      closesAt: fromLocalInput(closesAt) || undefined,
       allowMultiple,
       groupMode: allotted ? false : groupMode,
       groupMin: !allotted && groupMode ? Number(groupMin) : undefined,
@@ -754,12 +761,46 @@ export default function NewQuizPage() {
     </div>
   );
 
+  /*
+   * Repeated at the top of the settings step as well as the foot of it, the way
+   * the edit screen repeats its save bar. Settings run to more than a screen on
+   * any real quiz, and having to scroll the whole way back down to publish —
+   * or the whole way up to go back — was the reason this step felt long.
+   */
+  const settingsActions = (
+    <div className="flex flex-wrap items-center gap-3">
+      <button onClick={() => setStep("review")} className="rounded-lg border border-slate-300 px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+        ← Back
+      </button>
+      <button
+        onClick={publish}
+        disabled={!!publishing || rubricBroken}
+        className="rounded-lg bg-green-700 px-6 py-2.5 text-sm font-semibold text-white hover:bg-green-800 disabled:opacity-50"
+      >
+        {publishing || (selected.length > 1 ? `Publish ${selected.length} quizzes` : "Publish quiz")}
+      </button>
+      {publishError && <span className="text-sm text-red-600">{publishError}</span>}
+      {rubricBroken && (
+        <span className="text-xs text-amber-700">The rubric weights do not add up to 100% yet — fix that below and this unlocks.</span>
+      )}
+    </div>
+  );
+
   return (
     <main className="max-w-3xl mx-auto px-6 py-10 w-full">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-slate-900">New quiz</h1>
-        <Link href="/teacher" className="text-sm text-slate-500 hover:text-slate-800">← Dashboard</Link>
-      </div>
+      <TeacherBar
+        back={{
+          href: "/teacher",
+          label: "← Dashboard",
+          // Nothing is stored until the quiz is published, so leaving with
+          // drafts in hand throws them away. Said plainly, once.
+          confirm:
+            drafts.length > 0 && step !== "done"
+              ? "Leave without publishing? The questions you have added here are not saved anywhere yet."
+              : undefined,
+        }}
+      />
+      <h1 className="mt-3 text-2xl font-bold text-slate-900">New quiz</h1>
       <ol className="mt-3 flex gap-2 text-xs font-medium text-slate-400">
         {(["intake", "review", "settings", "done"] as Step[]).map((s, i) => (
           <li key={s} className={`rounded-full px-3 py-1 ${step === s ? "bg-blue-700 text-white" : "bg-slate-100"}`}>
@@ -1437,7 +1478,10 @@ export default function NewQuizPage() {
       )}
 
       {step === "settings" && (
-        <section className="mt-8 space-y-6">
+        <section className="mt-6 space-y-6">
+          <div className="sticky top-0 z-20 -mx-6 border-b border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
+            {settingsActions}
+          </div>
           {selected.length > 1 && (
             <p className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
               These settings apply to all {selected.length} quizzes you are publishing.
@@ -1450,73 +1494,86 @@ export default function NewQuizPage() {
               dealt to it. Group work and adaptive papers do not apply here, so those settings are hidden.
             </p>
           )}
-          <div>
-            <p className="font-semibold text-slate-900 text-sm">Theme</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {THEMES.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => setTheme(t.id)}
-                  className={`rounded-lg border-2 px-3 py-2 text-sm font-medium transition ${theme === t.id ? "border-blue-600" : "border-transparent"}`}
-                  style={{ background: t.bg, color: t.text }}
-                >
-                  <span className="inline-block w-3 h-3 rounded-full mr-1.5 align-middle" style={{ background: t.accent }} />
-                  {t.name}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {paperType === "same" && (
-          <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-            <p className="font-semibold text-slate-900 text-sm">Submission type</p>
-            <div className="flex flex-wrap gap-2 text-sm">
-              {([[false, "Individual"], [true, "Group work"]] as [boolean, string][]).map(([mode, label]) => (
-                <button
-                  key={label}
-                  onClick={() => setGroupMode(mode)}
-                  className={`rounded-lg px-4 py-2 font-medium ${groupMode === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            {groupMode ? (
-              <div className="text-sm text-slate-700 space-y-2">
-                <div className="flex flex-wrap gap-4">
-                  <label>
-                    Minimum members per group:{" "}
-                    <input type="number" min={1} value={groupMin} onChange={(e) => setGroupMin(e.target.value)} className="ml-2 w-20 rounded-lg border border-slate-300 px-3 py-1.5" />
-                  </label>
-                  <label>
-                    Maximum members per group:{" "}
-                    <input type="number" min={1} value={groupMax} onChange={(e) => setGroupMax(e.target.value)} className="ml-2 w-20 rounded-lg border border-slate-300 px-3 py-1.5" />
-                  </label>
-                </div>
-                <p className="text-xs text-slate-500">
-                  One member submits for the whole group. They enter the group name, semester, and every member&apos;s name and roll number before starting.
-                </p>
+          <SettingsCard>
+            <SettingRow label="Theme">
+              <div className="flex flex-wrap gap-2">
+                {THEMES.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setTheme(t.id)}
+                    className={`rounded-lg border-2 px-3 py-2 text-sm font-medium transition ${theme === t.id ? "border-blue-600" : "border-transparent"}`}
+                    style={{ background: t.bg, color: t.text }}
+                  >
+                    <span className="inline-block w-3 h-3 rounded-full mr-1.5 align-middle" style={{ background: t.accent }} />
+                    {t.name}
+                  </button>
+                ))}
               </div>
-            ) : (
-              <p className="text-xs text-slate-500">Each student submits their own attempt with their name, roll number and semester.</p>
-            )}
-          </div>
-          )}
+            </SettingRow>
 
-          <div className="grid sm:grid-cols-2 gap-4">
-            <label className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white p-3 text-sm">
-              <input type="checkbox" checked={shuffleQuestions} onChange={(e) => setShuffleQuestions(e.target.checked)} className="w-4 h-4" />
-              Shuffle question order per student
-            </label>
-            <label className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white p-3 text-sm">
-              <input type="checkbox" checked={shuffleOptions} onChange={(e) => setShuffleOptions(e.target.checked)} className="w-4 h-4" />
-              Shuffle options per student
-            </label>
-            <label className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white p-3 text-sm">
-              <input type="checkbox" checked={allowMultiple} onChange={(e) => setAllowMultiple(e.target.checked)} className="w-4 h-4" />
-              Allow multiple attempts per roll number
-            </label>
-          </div>
+            {paperType === "same" && (
+              <SettingRow
+                label="Who attempts this"
+                help={HELP.groupMode}
+                note={
+                  groupMode
+                    ? "One member submits for the whole group. They enter the group name, semester, and every member’s name and roll number before starting."
+                    : "Each student submits their own attempt with their name, roll number and semester."
+                }
+              >
+                <ChipGroup
+                  label="Who attempts this"
+                  value={groupMode}
+                  onChange={setGroupMode}
+                  options={[
+                    { value: false, label: "Individually" },
+                    { value: true, label: "In groups" },
+                  ]}
+                />
+                {groupMode && (
+                  <div className="flex flex-wrap gap-4 text-sm text-slate-700">
+                    <label>
+                      Minimum members per group:{" "}
+                      <input type="number" min={1} value={groupMin} onChange={(e) => setGroupMin(e.target.value)} className="ml-2 w-20 rounded-lg border border-slate-300 px-3 py-1.5" />
+                    </label>
+                    <label>
+                      Maximum members per group:{" "}
+                      <input type="number" min={1} value={groupMax} onChange={(e) => setGroupMax(e.target.value)} className="ml-2 w-20 rounded-lg border border-slate-300 px-3 py-1.5" />
+                    </label>
+                  </div>
+                )}
+              </SettingRow>
+            )}
+
+            {/* All five ticks in one grid, as on the edit screen. Each used to
+                carry its explanation spelled out beneath it, which ran the two
+                longest of them to most of a screen; the words are the same, one
+                hover, tap or Tab away in the balloon. */}
+            <SettingRow label="How the paper behaves">
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(
+                  [
+                    ["shuffleQuestions", "Shuffle question order per student", shuffleQuestions, setShuffleQuestions],
+                    ["shuffleOptions", "Shuffle options per student", shuffleOptions, setShuffleOptions],
+                    ["allowMultiple", "Allow multiple attempts per roll number", allowMultiple, setAllowMultiple],
+                    ["examMode", "Exam Interface mode", examMode, setExamMode],
+                    ["mstMode", "Adaptive paper (multistage)", mstMode, setMstMode],
+                  ] as const
+                )
+                  .filter(([key]) => !(paperType !== "same" && key === "mstMode"))
+                  .map(([key, label, checked, onChange], i) => (
+                    <CheckRow
+                      key={key}
+                      label={label}
+                      help={HELP[key]}
+                      align={i % 2 ? "right" : "left"}
+                      checked={checked}
+                      onChange={onChange}
+                    />
+                  ))}
+              </div>
+            </SettingRow>
+          </SettingsCard>
 
           {(anyRubric || peerFromRubric) && (
             <RubricEditor
@@ -1666,70 +1723,29 @@ export default function NewQuizPage() {
           )}
 
           {hasMultiQuestions && (
-            <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-              <p className="font-semibold text-slate-900 text-sm">Marking multiple-answer questions</p>
-              <div className="flex flex-wrap gap-2 text-sm">
-                {([["exact", "All or nothing"], ["partial", "Partial credit"]] as [MultiScoring, string][]).map(([mode, label]) => (
-                  <button
-                    key={mode}
-                    onClick={() => setMultiScoring(mode)}
-                    className={`rounded-lg px-4 py-2 font-medium ${multiScoring === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-xs text-slate-500">
-                {multiScoring === "exact"
-                  ? "Full marks only when the student ticks exactly the right set — nothing otherwise. The simplest rule to explain."
-                  : "Each correct tick earns a share of the marks and each wrong tick cancels one, never going below zero — so ticking everything scores nothing."}
-              </p>
-            </div>
+            <SettingsCard>
+              <SettingRow
+                label="Marking multiple-answer questions"
+                help={HELP.multiScoring}
+                note={
+                  multiScoring === "exact"
+                    ? "Full marks only when the student ticks exactly the right set — nothing otherwise. The simplest rule to explain."
+                    : "Each correct tick earns a share of the marks and each wrong tick cancels one, never going below zero — so ticking everything scores nothing."
+                }
+              >
+                <ChipGroup
+                  label="Marking multiple-answer questions"
+                  value={multiScoring}
+                  onChange={setMultiScoring}
+                  options={([["exact", "All or nothing"], ["partial", "Partial credit"]] as [MultiScoring, string][]).map(([value, label]) => ({ value, label }))}
+                />
+              </SettingRow>
+            </SettingsCard>
           )}
 
-          <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-            <label className="flex items-start gap-2.5 text-sm">
-              <input
-                type="checkbox"
-                checked={examMode}
-                onChange={(e) => setExamMode(e.target.checked)}
-                className="mt-0.5 w-4 h-4"
-              />
-              <span>
-                <span className="font-semibold text-slate-900">Exam Interface mode</span>
-                <span className="mt-1 block text-xs text-slate-500">
-                  Students see one question at a time in a layout modelled on national-level competitive
-                  examinations — a question palette showing what is answered, skipped or flagged, plus Save
-                  &amp; Next and Mark for Review controls. Answers count only once saved, as in the real
-                  thing. Use it to let students rehearse the interface itself, not just the questions.
-                </span>
-              </span>
-            </label>
-          </div>
-
-          {paperType === "same" && (
-          <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-            <label className="flex items-start gap-2.5 text-sm">
-              <input
-                type="checkbox"
-                checked={mstMode}
-                onChange={(e) => setMstMode(e.target.checked)}
-                className="mt-0.5 w-4 h-4"
-              />
-              <span>
-                <span className="font-semibold text-slate-900">Adaptive paper (multistage)</span>
-                <span className="mt-1 block text-xs text-slate-500">
-                  The paper is dealt in sections rather than all at once. Everyone sits the same first section;
-                  each section after it is drawn harder or easier according to how the last one went, so one
-                  bank of questions gives a stronger and a weaker student a paper pitched at each of them.
-                  Students move freely inside a section but cannot return to one they have finished. Combine it
-                  with Exam Interface mode for a full rehearsal. Needs a Difficulty on your questions.
-                </span>
-              </span>
-            </label>
-
-            {mstMode && (
-              <div className="space-y-3 border-t border-slate-200 pt-3">
+          {paperType === "same" && mstMode && (
+            <SettingsCard title="Adaptive paper">
+              <div className="space-y-3">
                 <div className="flex flex-wrap gap-4 text-sm text-slate-700">
                   <label>
                     Sections:{" "}
@@ -1864,85 +1880,63 @@ export default function NewQuizPage() {
                   );
                 })()}
               </div>
-            )}
-          </div>
+            </SettingsCard>
           )}
 
-          <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-            <p className="font-semibold text-slate-900 text-sm">Timer</p>
-            <div className="flex flex-wrap gap-2 text-sm">
-              {([["none", "No timer"], ["quiz", "Whole-quiz limit"], ["question", "Per-question countdown"]] as [TimerMode, string][]).map(([mode, label]) => {
-                const blocked = (examMode || mstMode) && mode === "question";
-                return (
-                  <button
-                    key={mode}
-                    onClick={() => !blocked && setTimerMode(mode)}
-                    disabled={blocked}
-                    title={blocked ? "This mode uses a whole-paper timer." : undefined}
-                    className={`rounded-lg px-4 py-2 font-medium ${effectiveTimerMode === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"} ${blocked ? "opacity-40 cursor-not-allowed" : ""}`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-            {(examMode || mstMode) && (
-              <p className="text-xs text-slate-500">
-                {mstMode ? "An adaptive paper" : "Exam Interface mode"} lets students move between questions, so it
-                uses a whole-paper timer — the per-question countdown is unavailable.
-              </p>
-            )}
-            {effectiveTimerMode === "quiz" && (
-              <label className="block text-sm text-slate-700">
-                Maximum minutes once a student starts:{" "}
-                <input type="number" min={1} value={maxMinutes} onChange={(e) => setMaxMinutes(e.target.value)} className="ml-2 w-24 rounded-lg border border-slate-300 px-3 py-1.5" />
-              </label>
-            )}
-            {effectiveTimerMode === "question" && (
-              <div className="text-sm text-slate-700 space-y-2">
-                <label className="block">
-                  Seconds per question:{" "}
-                  <input type="number" min={5} value={perQuestionSeconds} onChange={(e) => setPerQuestionSeconds(e.target.value)} className="ml-2 w-24 rounded-lg border border-slate-300 px-3 py-1.5" />
+          <SettingsCard>
+            <SettingRow label="Timing &amp; deadline" help={HELP.timer}>
+              <ChipGroup
+                label="Timer"
+                value={effectiveTimerMode}
+                onChange={setTimerMode}
+                options={([["none", "No timer"], ["quiz", "Whole-quiz limit"], ["question", "Per-question countdown"]] as [TimerMode, string][]).map(
+                  ([mode, label]) => ({
+                    value: mode,
+                    label,
+                    // Said out loud when asked, rather than left as a dimmed
+                    // button with the reason hidden in a `title` nobody sees.
+                    unavailable:
+                      (examMode || mstMode) && mode === "question"
+                        ? `${mstMode ? "An adaptive paper" : "Exam Interface mode"} lets students move between questions, so it uses a whole-paper timer.`
+                        : undefined,
+                  })
+                )}
+              />
+              {effectiveTimerMode === "quiz" && (
+                <label className="block text-sm text-slate-700">
+                  Maximum minutes once a student starts:{" "}
+                  <input type="number" min={1} value={maxMinutes} onChange={(e) => setMaxMinutes(e.target.value)} className="ml-2 w-24 rounded-lg border border-slate-300 px-3 py-1.5" />
                 </label>
-                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
-                  Per-question mode shows one question at a time and students cannot go back — like a rapid-fire round.
-                </p>
-              </div>
-            )}
-            <label className="block text-sm text-slate-700">
-              Stop accepting responses at (optional):{" "}
-              <input type="datetime-local" value={closesAt} onChange={(e) => setClosesAt(e.target.value)} className="ml-2 rounded-lg border border-slate-300 px-3 py-1.5" />
-            </label>
-          </div>
+              )}
+              {effectiveTimerMode === "question" && (
+                <div className="space-y-2 text-sm text-slate-700">
+                  <label className="block">
+                    Seconds per question:{" "}
+                    <input type="number" min={5} value={perQuestionSeconds} onChange={(e) => setPerQuestionSeconds(e.target.value)} className="ml-2 w-24 rounded-lg border border-slate-300 px-3 py-1.5" />
+                  </label>
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-700">
+                    Per-question mode shows one question at a time and students cannot go back — like a rapid-fire round.
+                  </p>
+                </div>
+              )}
+            </SettingRow>
 
-          <label className="block text-sm text-slate-700">
-            <span className="font-semibold text-slate-900">Intro media (optional)</span> — an image or YouTube video students see before starting (e.g. “watch this, then begin”):
-            <input
-              value={introMedia}
-              onChange={(e) => setIntroMedia(e.target.value)}
-              placeholder="https://www.youtube.com/watch?v=…"
-              className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </label>
+            <DeadlinePicker value={closesAt} onChange={setClosesAt} />
 
-          {publishError && <p className="text-sm text-red-600">{publishError}</p>}
-          <div className="flex gap-3">
-            <button onClick={() => setStep("review")} className="rounded-lg border border-slate-300 px-5 py-2.5 font-semibold text-slate-700 hover:bg-slate-100">
-              ← Back
-            </button>
-            <button
-              onClick={publish}
-              disabled={!!publishing || rubricBroken}
-              className="rounded-lg bg-green-700 px-6 py-2.5 text-white font-semibold hover:bg-green-800 disabled:opacity-50"
+            <SettingRow
+              label="Intro media (optional)"
+              note="An image or YouTube video students see before starting — “watch this, then begin”."
             >
-              {publishing || (selected.length > 1 ? `Publish ${selected.length} quizzes` : "Publish quiz")}
-            </button>
-          </div>
-          {rubricBroken && (
-            <p className="text-xs text-amber-700">
-              The rubric weights do not add up to 100% yet — fix that above and this unlocks.
-            </p>
-          )}
+              <input
+                value={introMedia}
+                onChange={(e) => setIntroMedia(e.target.value)}
+                placeholder="https://www.youtube.com/watch?v=…"
+                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </SettingRow>
+          </SettingsCard>
+
+          {settingsActions}
         </section>
       )}
 

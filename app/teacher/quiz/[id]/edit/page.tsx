@@ -33,6 +33,12 @@ import RubricEditor from "@/components/RubricEditor";
 import type { EditPlan } from "@/lib/edit";
 import type { GradingMode, MultiScoring, Question, QuizSettings, TimerMode } from "@/lib/types";
 import Logo from "@/components/Logo";
+import CheckRow from "@/components/settings/CheckRow";
+import ChipGroup from "@/components/settings/ChipGroup";
+import DeadlinePicker from "@/components/settings/DeadlinePicker";
+import Hint from "@/components/Hint";
+import { HELP } from "@/lib/help";
+import { fromLocalInput, toLocalInput } from "@/lib/deadline";
 
 /** The anchors the jump bar offers, in the order they appear on screen. */
 const SECTIONS: [string, string][] = [
@@ -41,15 +47,6 @@ const SECTIONS: [string, string][] = [
   ["allotment", "Allotment"],
   ["questions", "Questions"],
 ];
-
-/** ISO instant → the local "YYYY-MM-DDTHH:mm" a datetime-local input wants. */
-function toLocalInput(iso?: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 export default function EditQuizPage() {
   const { id } = useParams<{ id: string }>();
@@ -146,7 +143,7 @@ export default function EditQuizPage() {
         allotment: settings.allotMode ? allotment : undefined,
         settings: {
           ...settings,
-          closesAt: closesAt ? new Date(closesAt).toISOString() : "",
+          closesAt: fromLocalInput(closesAt),
           groupMode,
           groupMin: groupMode ? Number(groupMin) : undefined,
           groupMax: groupMode ? Number(groupMax) : undefined,
@@ -356,6 +353,11 @@ export default function EditQuizPage() {
       >
         Cancel
       </button>
+      {/* The bar at the top of the page scrolls away; on a long paper the
+          dashboard was two clicks and a scroll from here. */}
+      <Link href="/teacher" className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+        Dashboard
+      </Link>
       <span className="text-xs font-semibold text-slate-400">Jump to</span>
       {SECTIONS.filter(([anchor]) => anchor !== "allotment" || settings.allotMode).map(([anchor, label]) => (
         <button
@@ -618,25 +620,29 @@ export default function EditQuizPage() {
             ] as const
           )
             .filter(([key]) => !(settings.allotMode && key === "mstMode"))
-            .map(([key, label]) => (
-            <label key={key} className="flex items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={!!settings[key]}
-                onChange={(e) => set({ [key]: e.target.checked } as Partial<QuizSettings>)}
-                className="h-4 w-4"
-              />
-              {label}
-            </label>
+            .map(([key, label], i) => (
+            <CheckRow
+              key={key}
+              label={label}
+              help={HELP[key]}
+              /* The right-hand column hangs its balloon from the other edge, so
+                 it opens into the card rather than off the side of the page. */
+              align={i % 2 ? "right" : "left"}
+              checked={!!settings[key]}
+              onChange={(next) => set({ [key]: next } as Partial<QuizSettings>)}
+            />
           ))}
         </div>
 
-        {/* ---------- submission type (never group work on an allotted test) ---------- */}
+        {/* ---------- who attempts it (never group work on an allotted test) ---------- */}
         {!settings.allotMode && (
         <div className="space-y-2 border-t border-slate-100 pt-3">
-          <p className="text-sm font-semibold text-slate-900">Submission type</p>
+          <div className="flex items-center gap-1.5">
+            <p className="text-sm font-semibold text-slate-900">Who attempts this</p>
+            <Hint entry={HELP.groupMode} />
+          </div>
           <div className="flex flex-wrap gap-2 text-sm">
-            {([[false, "Individual"], [true, "Group work"]] as [boolean, string][]).map(([mode, label]) => (
+            {([[false, "Individually"], [true, "In groups"]] as [boolean, string][]).map(([mode, label]) => (
               <button
                 key={label}
                 onClick={() => set({ groupMode: mode })}
@@ -684,33 +690,25 @@ export default function EditQuizPage() {
 
         {/* ---------- timer ---------- */}
         <div className="space-y-2 border-t border-slate-100 pt-3 text-sm text-slate-700">
-          <p className="font-semibold text-slate-900">Timer</p>
-          <div className="flex flex-wrap gap-2">
-            {([["none", "No timer"], ["quiz", "Whole-quiz limit"], ["question", "Per-question countdown"]] as [TimerMode, string][]).map(
-              ([mode, label]) => {
-                const blocked = (settings.examMode || settings.mstMode) && mode === "question";
-                return (
-                  <button
-                    key={mode}
-                    onClick={() => !blocked && setTimer(mode)}
-                    disabled={blocked}
-                    title={blocked ? "This mode uses a whole-paper timer." : undefined}
-                    className={`rounded-lg px-4 py-2 font-medium ${
-                      effectiveTimerMode === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                    } ${blocked ? "cursor-not-allowed opacity-40" : ""}`}
-                  >
-                    {label}
-                  </button>
-                );
-              }
-            )}
+          <div className="flex items-center gap-1.5">
+            <p className="font-semibold text-slate-900">Timing &amp; deadline</p>
+            <Hint entry={HELP.timer} />
           </div>
-          {(settings.examMode || settings.mstMode) && (
-            <p className="text-xs text-slate-500">
-              {settings.mstMode ? "An adaptive paper" : "Exam Interface mode"} lets students move between questions, so
-              it uses a whole-paper timer — the per-question countdown is unavailable.
-            </p>
-          )}
+          <ChipGroup
+            label="Timer"
+            value={effectiveTimerMode}
+            onChange={setTimer}
+            options={([["none", "No timer"], ["quiz", "Whole-quiz limit"], ["question", "Per-question countdown"]] as [TimerMode, string][]).map(
+              ([mode, label]) => ({
+                value: mode,
+                label,
+                unavailable:
+                  (settings.examMode || settings.mstMode) && mode === "question"
+                    ? `${settings.mstMode ? "An adaptive paper" : "Exam Interface mode"} lets students move between questions, so it uses a whole-paper timer.`
+                    : undefined,
+              })
+            )}
+          />
           {effectiveTimerMode === "quiz" && (
             <label className="block">
               Maximum minutes once a student starts
@@ -740,20 +738,7 @@ export default function EditQuizPage() {
               </p>
             </div>
           )}
-          <label className="block">
-            Stop accepting responses at (optional)
-            <input
-              type="datetime-local"
-              value={closesAt}
-              onChange={(e) => setClosesAt(e.target.value)}
-              className="ml-2 rounded-lg border border-slate-300 px-3 py-1.5 text-slate-900"
-            />
-            {closesAt && (
-              <button onClick={() => setClosesAt("")} className="ml-2 text-xs font-semibold text-slate-500 hover:text-slate-800">
-                Clear
-              </button>
-            )}
-          </label>
+          <DeadlinePicker value={closesAt} onChange={setClosesAt} />
         </div>
 
         {/* ---------- adaptive paper ---------- */}
