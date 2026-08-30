@@ -12,7 +12,7 @@ import TeacherBar from "@/components/TeacherBar";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import { correctKeysOf, isChoice, isGraded, isSurvey, splitKeys } from "@/lib/questions";
-import { normalizeAllotment } from "@/lib/allot";
+import { allotmentProblems, normalizeAllotment } from "@/lib/allot";
 import { semesterLabel } from "@/lib/normalize";
 import PeerReviewPanel from "@/components/PeerReviewPanel";
 import SharePanel from "@/components/SharePanel";
@@ -165,6 +165,14 @@ export default function QuizDetailPage() {
   const avg = attempts.length
     ? attempts.reduce((s, a) => s + (a.score ?? 0), 0) / attempts.length
     : 0;
+
+  // An allotted quiz is born closed and stays closed until the teacher opens it,
+  // so "why does the link say it is not accepting responses?" has a real answer
+  // that only this page can give. Empty means nothing is blocking the open.
+  const openBlockedBy = useMemo(() => {
+    if (!quiz || !allotted) return "";
+    return allotmentProblems(normalizeAllotment(quiz.allotment), quiz.questions)[0] ?? "";
+  }, [quiz, allotted]);
 
   async function toggleAccepting() {
     if (!quiz) return;
@@ -347,6 +355,38 @@ export default function QuizDetailPage() {
           Open as student
         </a>
       </div>
+      {!quiz.accepting && (
+        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">
+            This quiz is closed — anyone opening the link above is told it is not accepting responses.
+          </p>
+          {openBlockedBy ? (
+            <>
+              <p className="mt-1 text-sm text-amber-800">{openBlockedBy}</p>
+              <Link
+                href={`/teacher/quiz/${quiz.id}/edit#allotment`}
+                className="mt-2 inline-block rounded-lg bg-amber-700 px-4 py-1.5 text-sm font-semibold text-white hover:bg-amber-800"
+              >
+                Finish the allotment →
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="mt-1 text-sm text-amber-800">
+                {allotted
+                  ? "Every roll on the roster has a question, so it is ready to open whenever you are — an allotted test is published closed and never opens itself."
+                  : "Open it when you want the class to start; you can close it again at any time."}
+              </p>
+              <button
+                onClick={toggleAccepting}
+                className="mt-2 rounded-lg bg-green-700 px-4 py-1.5 text-sm font-semibold text-white hover:bg-green-800"
+              >
+                Open it to students
+              </button>
+            </>
+          )}
+        </div>
+      )}
       <SharePanel quizId={quiz.id} questionCount={quiz.questions.length} />
 
       {showQr && qr && (
