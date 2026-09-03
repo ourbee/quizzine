@@ -5,16 +5,18 @@
 
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import TeacherBar from "@/components/TeacherBar";
+import QuizPicker from "@/components/QuizPicker";
 import * as XLSX from "xlsx";
 import { NO_SEMESTER } from "@/lib/normalize";
 import {
   BAND_COLORS,
   DEFAULT_BANDS,
   DEFAULT_OPTIONS,
+  bandFor,
   bandRange,
   buildReport,
   normalizeBands,
@@ -30,12 +32,33 @@ import {
   type StudentReportRow,
   type Weighting,
 } from "@/lib/report";
+import {
+  QUIZ_LINE_SORTS,
+  SEMESTER_QUIZ_SORTS,
+  STUDENT_SORTS,
+  matchStudent,
+  pickQuizzes,
+  quizzesForSemester,
+  quizzesSatBy,
+  quizzesSatBySemester,
+  semesterQuizLines,
+  semestersPresent,
+  semestersSatBy,
+  sortSemesterQuizLines,
+  sortStudentQuizLines,
+  sortStudents,
+  studentQuizLines,
+  type QuizLineSort,
+  type SemesterQuizSort,
+  type StudentSort,
+} from "@/lib/reportviews";
 
 interface QuizListRow {
   id: string;
   title: string;
   created_at: string;
   responses: string | number;
+  accepting?: boolean;
 }
 
 const CHIP: Record<BandColor, string> = {
@@ -57,6 +80,9 @@ const BAR: Record<BandColor, string> = {
 };
 
 const SELECTION_KEY = "quizzine.report.quizIds";
+
+/** Matches the cap the reports endpoint applies to a single request. */
+const ALL_QUIZ_LIMIT = 100;
 
 /**
  * Semester labels in a report. 0 is the combined row the report itself adds;
@@ -93,6 +119,16 @@ export default function ReportsPage() {
 
   const [aliases, setAliases] = useState<AliasMap>({});
   const [aliasBusy, setAliasBusy] = useState("");
+
+  // The student and semester views read across every quiz the teacher owns, not
+  // just the ones ticked above — "all the quizzes Mary has ever sat" is a
+  // different question from "the quizzes in this report".
+  const [everything, setEverything] = useState<{ quizzes: ReportQuiz[]; attempts: ReportAttempt[] } | null>(null);
+  const [everythingState, setEverythingState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const viewsRef = useRef<HTMLDivElement>(null);
+  // The state above only flips once the fetch has started, which is a tick too
+  // late to stop a second observer firing in the same frame.
+  const everythingAsked = useRef(false);
 
   // Quiz list + saved band schemes.
   useEffect(() => {
@@ -164,6 +200,58 @@ export default function ReportsPage() {
     loadReport(selected);
   }, [selected, loadReport]);
 
+  /**
+   * Every quiz's totals, fetched once, for the two views at the foot of the page.
+   *
+   * It holds off until those views come within a screen of the viewport. On a
+   * short page that is immediately; on a term's worth of marks the teacher has
+   * to scroll first, and one who only came to print the table above never pays
+   * for a term of attempts they will not look at.
+   */
+  useEffect(() => {
+    if (everythingState !== "idle" || !quizzes.length) return;
+
+    const load = async () => {
+      if (everythingAsked.current) return;
+      everythingAsked.current = true;
+      setEverythingState("loading");
+      const res = await fetch("/api/reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quizIds: quizzes.map((z) => z.id).slice(0, ALL_QUIZ_LIMIT) }),
+      });
+      if (!res.ok) {
+        setEverythingState("error");
+        return;
+      }
+      setEverything(await res.json());
+      setEverythingState("ready");
+    };
+
+    const node = viewsRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") {
+      load();
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          observer.disconnect();
+          load();
+        }
+      },
+      { rootMargin: "500px" }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [everythingState, quizzes]);
+
+  /** The settings the views share with the table above, in one stable object. */
+  const viewOptions = useMemo(
+    () => ({ weighting, missing, repeats, bands, aliases }),
+    [weighting, missing, repeats, bands, aliases]
+  );
+
   const availableSemesters = useMemo(() => {
     const set = new Set<number>();
     for (const a of source?.attempts ?? []) {
@@ -212,10 +300,6 @@ export default function ReportsPage() {
     () => (report?.students ?? []).filter((s) => s.semesters.length > 1),
     [report]
   );
-
-  function toggleQuiz(id: string) {
-    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  }
 
   function updateBand(i: number, patch: Partial<Band>) {
     setBands((prev) => prev.map((b, j) => (j === i ? { ...b, ...patch } : b)));
@@ -417,54 +501,15 @@ export default function ReportsPage() {
 
       {/* ---------- quiz picker ---------- */}
       <section className="mt-6 rounded-xl border border-slate-200 bg-white p-4 print:hidden">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h2 className="font-bold text-slate-900">
-            Quizzes in this report
-            <span className="ml-2 text-sm font-normal text-slate-500">{selected.length} selected</span>
-          </h2>
-          <div className="flex gap-2 text-sm">
-            <button
-              onClick={() => setSelected(quizzes.map((z) => z.id))}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-100"
-            >
-              Select all
-            </button>
-            <button
-              onClick={() => setSelected([])}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-100"
-            >
-              Clear
-            </button>
-          </div>
+        <h2 className="font-bold text-slate-900">Quizzes in this report</h2>
+        <div className="mt-3">
+          <QuizPicker
+            quizzes={quizzes}
+            selected={selected}
+            onChange={setSelected}
+            storageKey="quizzine.report.quizview"
+          />
         </div>
-        {quizzes.length === 0 ? (
-          <p className="mt-3 text-sm text-slate-500">No quizzes yet.</p>
-        ) : (
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {quizzes.map((z) => (
-              <label
-                key={z.id}
-                className={`flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer text-sm ${
-                  selected.includes(z.id) ? "border-blue-300 bg-blue-50/60" : "border-slate-200 hover:bg-slate-50"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.includes(z.id)}
-                  onChange={() => toggleQuiz(z.id)}
-                  className="h-4 w-4"
-                />
-                <span className="flex-1 min-w-0">
-                  <span className="block font-medium text-slate-900 truncate">{z.title}</span>
-                  <span className="block text-xs text-slate-500">
-                    {Number(z.responses)} response{Number(z.responses) === 1 ? "" : "s"} ·{" "}
-                    {new Date(z.created_at).toLocaleDateString()}
-                  </span>
-                </span>
-              </label>
-            ))}
-          </div>
-        )}
       </section>
 
       {/* ---------- how marks are combined ---------- */}
@@ -893,7 +938,722 @@ export default function ReportsPage() {
           )}
         </>
       )}
+
+      {/* ---------- one student, one semester ---------- */}
+      <div ref={viewsRef} className="mt-10 border-t border-slate-200 pt-8">
+        {everythingState === "error" ? (
+          <p className="text-sm text-red-600">Could not load your other quizzes.</p>
+        ) : !everything ? (
+          <p className="text-sm text-slate-500">
+            {quizzes.length ? "Loading every quiz…" : "Publish a quiz and these views fill in."}
+          </p>
+        ) : (
+          <>
+            {quizzes.length > ALL_QUIZ_LIMIT && (
+              <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                You have {quizzes.length} quizzes and these two views read your {ALL_QUIZ_LIMIT} most recent.{" "}
+                Older ones still appear in the report above when you tick them.
+              </p>
+            )}
+            <StudentView source={everything} quizzes={quizzes} selected={selected} options={viewOptions} />
+            <SemesterView source={everything} quizzes={quizzes} selected={selected} options={viewOptions} />
+          </>
+        )}
+      </div>
     </main>
+  );
+}
+
+interface ViewProps {
+  source: { quizzes: ReportQuiz[]; attempts: ReportAttempt[] };
+  quizzes: QuizListRow[];
+  selected: string[];
+  options: {
+    weighting: Weighting;
+    missing: Missing;
+    repeats: Repeats;
+    bands: Band[];
+    aliases: AliasMap;
+  };
+}
+
+/** Which quizzes a student's or a semester's figures are drawn from. */
+type Scope =
+  | { kind: "sat" }
+  | { kind: "report" }
+  | { kind: "semester"; semester: number }
+  | { kind: "custom"; ids: string[] };
+
+function ScopeButton({
+  on,
+  onClick,
+  disabled,
+  children,
+}: {
+  on: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={on}
+      disabled={disabled}
+      className={`rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-40 ${
+        on ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div>
+      <p className="text-lg font-bold text-slate-900 tabular-nums">{value}</p>
+      <p className="text-[11px] text-slate-500">{label}</p>
+      {hint && <p className="text-[11px] text-slate-400">{hint}</p>}
+    </div>
+  );
+}
+
+/**
+ * One student down the page: every quiz they have sat, against the class and
+ * against themselves.
+ *
+ * The scope is the point of it. The same student reads differently over a term,
+ * over a semester, or over the three papers of one unit, and a teacher writing
+ * a reference needs all three without re-ticking the picker at the top.
+ */
+function StudentView({ source, quizzes, selected, options }: ViewProps) {
+  const [search, setSearch] = useState("");
+  const [semFilter, setSemFilter] = useState<number | "all">("all");
+  const [sort, setSort] = useState<StudentSort>("name");
+  const [openRoll, setOpenRoll] = useState<string | null>(null);
+  const [scope, setScope] = useState<Scope>({ kind: "sat" });
+  const [lineSort, setLineSort] = useState<QuizLineSort>("recent");
+  const [picking, setPicking] = useState(false);
+
+  // The roster leaves out quizzes a student never sat whatever the page's own
+  // setting says: a list of everyone the teacher has taught is not the place to
+  // score a first-year zero on a third-year paper.
+  const roster = useMemo(
+    () => buildReport(source.quizzes, source.attempts, { ...options, missing: "exclude", semester: "all" }),
+    [source, options]
+  );
+
+  const semesters = useMemo(
+    () => semestersPresent(source.attempts, options.aliases),
+    [source, options.aliases]
+  );
+
+  const list = useMemo(() => {
+    const rows = roster.students.filter(
+      (s) =>
+        matchStudent(s, search) &&
+        // A student who moved up mid-year is listed under both semesters, since
+        // either is a fair way to go looking for them.
+        (semFilter === "all" || s.semesters.includes(semFilter))
+    );
+    return sortStudents(rows, sort);
+  }, [roster, search, semFilter, sort]);
+
+  const openStudent = openRoll ? roster.students.find((s) => s.roll === openRoll) ?? null : null;
+  const satSemesters = useMemo(
+    () => (openRoll ? semestersSatBy(openRoll, source.attempts, options.aliases) : []),
+    [openRoll, source, options.aliases]
+  );
+
+  const scopedIds = useMemo(() => {
+    if (!openRoll) return new Set<string>();
+    if (scope.kind === "report") return new Set(selected);
+    if (scope.kind === "custom") return new Set(scope.ids);
+    if (scope.kind === "semester") {
+      return quizzesSatBySemester(openRoll, scope.semester, source.attempts, options.aliases);
+    }
+    return quizzesSatBy(openRoll, source.attempts, options.aliases);
+  }, [openRoll, scope, selected, source, options.aliases]);
+
+  const report = useMemo(() => {
+    const scoped = pickQuizzes(source.quizzes, scopedIds);
+    if (!scoped.length) return null;
+    return buildReport(scoped, source.attempts, { ...options, semester: "all" });
+  }, [source, scopedIds, options]);
+
+  const row = report && openRoll ? report.students.find((s) => s.roll === openRoll) ?? null : null;
+  const lines = useMemo(
+    () => (report && openRoll ? sortStudentQuizLines(studentQuizLines(report, openRoll), lineSort) : []),
+    [report, openRoll, lineSort]
+  );
+  const rank = report && row ? report.students.findIndex((s) => s.roll === row.roll) + 1 : 0;
+  const classAverage = report?.overall?.average ?? null;
+  const marks = lines.map((l) => l.result).filter((r): r is NonNullable<typeof r> => !!r);
+
+  function choose(roll: string) {
+    const next = openRoll === roll ? null : roll;
+    setOpenRoll(next);
+    // A scope that meant something for the last student — semester 5, say — can
+    // be empty for this one, so every student starts from their own record.
+    setScope({ kind: "sat" });
+    setPicking(false);
+  }
+
+  return (
+    <section>
+      <h2 className="text-xl font-bold text-slate-900">One student</h2>
+      <p className="mt-1 text-sm text-slate-500">
+        Everything one student has done, across as much or as little of the year as you like. Find them by name or
+        by roll number; a student who has submitted under two spellings is found under either.
+      </p>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 print:hidden">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name or roll number…"
+          aria-label="Search students by name or roll number"
+          className="min-w-[12rem] flex-1 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <select
+          value={semFilter}
+          onChange={(e) => setSemFilter(e.target.value === "all" ? "all" : Number(e.target.value))}
+          aria-label="Filter students by semester"
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+        >
+          <option value="all">Every semester</option>
+          {semesters.map((n) => (
+            <option key={n} value={n}>
+              {semLabel(n)}
+            </option>
+          ))}
+        </select>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as StudentSort)}
+          aria-label="Sort the students"
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+        >
+          {STUDENT_SORTS.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <p className="mt-2 text-xs text-slate-500 print:hidden">
+        {list.length} of {roster.students.length} students.{" "}
+        Percentages here are each student&apos;s average over everything they have sat.
+      </p>
+
+      {list.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-500">Nobody matches that.</p>
+      ) : (
+        <div className="mt-3 flex max-h-64 flex-wrap gap-1.5 overflow-y-auto print:hidden">
+          {list.map((s) => (
+            <button
+              key={s.roll}
+              onClick={() => choose(s.roll)}
+              aria-pressed={openRoll === s.roll}
+              className={`rounded-full px-3 py-1.5 text-xs font-medium ${
+                openRoll === s.roll ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              {s.name}
+              <span className={openRoll === s.roll ? "ml-1.5 text-slate-300" : "ml-1.5 text-slate-400"}>
+                {s.roll} · {semLabel(s.semester, false)} · {s.percent}%
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {openStudent && (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <div>
+              <p className="text-lg font-bold text-slate-900">{openStudent.name}</p>
+              <p className="text-xs text-slate-500">
+                <span className="font-mono">{openStudent.roll}</span> ·{" "}
+                {openStudent.semesters.map((n) => semLabel(n, false)).join(", ")}
+                {openStudent.nameVariants.length > 1 &&
+                  ` · also submitted as ${openStudent.nameVariants.slice(1).join(", ")}`}
+              </p>
+            </div>
+            <button
+              onClick={() => setOpenRoll(null)}
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 print:hidden"
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 print:hidden">
+            <span className="mr-1 text-xs font-medium text-slate-500">Count:</span>
+            <ScopeButton on={scope.kind === "sat"} onClick={() => setScope({ kind: "sat" })}>
+              Every quiz they sat
+            </ScopeButton>
+            <ScopeButton
+              on={scope.kind === "report"}
+              disabled={!selected.length}
+              onClick={() => setScope({ kind: "report" })}
+            >
+              {selected.length ? `The ${selected.length} in this report` : "The report above"}
+            </ScopeButton>
+            {satSemesters.map((n) => (
+              <ScopeButton
+                key={n}
+                on={scope.kind === "semester" && scope.semester === n}
+                onClick={() => setScope({ kind: "semester", semester: n })}
+              >
+                What they sat in {semLabel(n, false)}
+              </ScopeButton>
+            ))}
+            <ScopeButton
+              on={scope.kind === "custom"}
+              onClick={() => {
+                setScope({ kind: "custom", ids: scope.kind === "custom" ? scope.ids : [...scopedIds] });
+                setPicking(true);
+              }}
+            >
+              Chosen quizzes
+            </ScopeButton>
+            {scope.kind === "custom" && (
+              <button
+                onClick={() => setPicking((v) => !v)}
+                className="text-xs font-semibold text-blue-700 hover:underline"
+              >
+                {picking ? "Hide the list" : "Change which"}
+              </button>
+            )}
+          </div>
+
+          {scope.kind === "custom" && picking && (
+            <div className="mt-3 rounded-lg border border-slate-200 p-3 print:hidden">
+              <QuizPicker
+                quizzes={quizzes}
+                selected={scope.ids}
+                onChange={(ids) => setScope({ kind: "custom", ids })}
+                storageKey="quizzine.report.studentview"
+                columns={1}
+                maxHeight="14rem"
+              />
+            </div>
+          )}
+
+          {!row || !report ? (
+            <p className="mt-4 text-sm text-slate-500">
+              {scopedIds.size
+                ? "They have not submitted to any of those quizzes."
+                : "No quizzes in that set yet — pick some above."}
+            </p>
+          ) : (
+            <>
+              <div className="mt-4 grid grid-cols-3 gap-3 border-t border-slate-100 pt-3 sm:grid-cols-6">
+                <Stat label="Overall" value={`${row.percent}%`} hint={row.band.label} />
+                <Stat
+                  label="Quizzes sat"
+                  value={`${row.attempted}/${report.quizzes.length}`}
+                  hint={row.missed ? `${row.missed} missed` : "all of them"}
+                />
+                <Stat
+                  label="Best"
+                  value={marks.length ? `${Math.round(Math.max(...marks.map((m) => m.percent)))}%` : "—"}
+                />
+                <Stat
+                  label="Worst"
+                  value={marks.length ? `${Math.round(Math.min(...marks.map((m) => m.percent)))}%` : "—"}
+                />
+                <Stat
+                  label="vs the class"
+                  value={
+                    classAverage === null
+                      ? "—"
+                      : `${row.percent - classAverage >= 0 ? "+" : ""}${Math.round((row.percent - classAverage) * 10) / 10}`
+                  }
+                  hint={classAverage === null ? undefined : `class ${classAverage}%`}
+                />
+                <Stat
+                  label="Placed"
+                  value={rank ? `${rank} of ${report.students.length}` : "—"}
+                  hint={row.groupCount ? `${row.groupCount} via group work` : row.lateCount ? `${row.lateCount} late` : undefined}
+                />
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <h3 className="text-sm font-bold text-slate-900">Quiz by quiz</h3>
+                <select
+                  value={lineSort}
+                  onChange={(e) => setLineSort(e.target.value as QuizLineSort)}
+                  aria-label="Sort this student's quizzes"
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 print:hidden"
+                >
+                  {QUIZ_LINE_SORTS.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="mt-2 divide-y divide-slate-100">
+                {lines.map((line) => (
+                  <div key={line.quiz.id} className="py-2.5">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">
+                        {line.quiz.title}
+                        {line.result?.viaGroup && (
+                          <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-800">
+                            {line.result.viaGroup}
+                          </span>
+                        )}
+                        {line.result?.late && (
+                          <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                            late
+                          </span>
+                        )}
+                      </p>
+                      <p className="shrink-0 text-sm font-bold tabular-nums text-slate-900">
+                        {line.result ? `${Math.round(line.result.percent)}%` : <span className="text-slate-300">not sat</span>}
+                      </p>
+                    </div>
+                    <div className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-slate-100">
+                      {line.result && (
+                        <div
+                          className={BAR[bandFor(line.result.percent, normalizeBands(options.bands)).color]}
+                          style={{ width: `${Math.max(1, Math.min(100, line.result.percent))}%` }}
+                        />
+                      )}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                      <span>{new Date(line.quiz.created_at).toLocaleDateString()}</span>
+                      {line.result && (
+                        <span className="tabular-nums">
+                          {line.result.score} of {line.result.max}
+                        </span>
+                      )}
+                      {line.classAverage !== null && (
+                        <span className="tabular-nums">
+                          class {line.classAverage}% over {line.classSat} student{line.classSat === 1 ? "" : "s"}
+                        </span>
+                      )}
+                      {line.vsClass !== null && (
+                        <span className={line.vsClass >= 0 ? "text-emerald-700" : "text-rose-700"}>
+                          {line.vsClass >= 0 ? "+" : ""}
+                          {line.vsClass} vs the class
+                        </span>
+                      )}
+                      {line.result && line.result.discarded > 0 && (
+                        <span>
+                          {line.result.discarded} other attempt{line.result.discarded === 1 ? "" : "s"} set aside
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * One semester across the page: how a cohort did, on the papers that cohort sat.
+ *
+ * A quiz is never labelled with a semester — students declare theirs when they
+ * submit — so "the quizzes assigned to semester 3" can only mean the quizzes
+ * semester 3 actually sat. That is what the default scope here builds from.
+ */
+function SemesterView({ source, quizzes, selected, options }: ViewProps) {
+  const semesters = useMemo(
+    () => semestersPresent(source.attempts, options.aliases),
+    [source, options.aliases]
+  );
+  const [semester, setSemester] = useState<number | null>(null);
+  const [scope, setScope] = useState<Scope>({ kind: "sat" });
+  const [picking, setPicking] = useState(false);
+  const [quizSort, setQuizSort] = useState<SemesterQuizSort>("recent");
+  const [studentSort, setStudentSort] = useState<StudentSort>("rank");
+  const [search, setSearch] = useState("");
+
+  // The first semester that has any work in it, so the section is never an
+  // empty frame waiting to be clicked.
+  useEffect(() => {
+    setSemester((current) => (current === null ? semesters[0] ?? null : current));
+  }, [semesters]);
+
+  const scopedIds = useMemo(() => {
+    if (semester === null) return new Set<string>();
+    if (scope.kind === "report") return new Set(selected);
+    if (scope.kind === "custom") return new Set(scope.ids);
+    return quizzesForSemester(semester, source.attempts, options.aliases);
+  }, [semester, scope, selected, source, options.aliases]);
+
+  const report = useMemo(() => {
+    if (semester === null) return null;
+    const scoped = pickQuizzes(source.quizzes, scopedIds);
+    if (!scoped.length) return null;
+    return buildReport(scoped, source.attempts, { ...options, semester });
+  }, [source, scopedIds, semester, options]);
+
+  const summary = report?.overall ?? null;
+  const quizLines = useMemo(
+    () => (report ? sortSemesterQuizLines(semesterQuizLines(report.quizzes, report.students), quizSort) : []),
+    [report, quizSort]
+  );
+  const students = useMemo(
+    () => (report ? sortStudents(report.students.filter((s) => matchStudent(s, search)), studentSort) : []),
+    [report, search, studentSort]
+  );
+
+  return (
+    <section className="mt-10">
+      <h2 className="text-xl font-bold text-slate-900">One semester</h2>
+      <p className="mt-1 text-sm text-slate-500">
+        A cohort and the papers it sat. Nothing here labels a quiz with a semester — students say which semester
+        they are in when they submit — so a semester&apos;s quizzes are the ones its students actually took.
+      </p>
+
+      {semesters.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-500">No submitted responses yet.</p>
+      ) : (
+        <>
+          <div className="mt-4 flex flex-wrap items-center gap-1.5 print:hidden">
+            {semesters.map((n) => (
+              <ScopeButton
+                key={n}
+                on={semester === n}
+                onClick={() => {
+                  setSemester(n);
+                  setScope({ kind: "sat" });
+                  setPicking(false);
+                }}
+              >
+                {semLabel(n)}
+              </ScopeButton>
+            ))}
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 print:hidden">
+            <span className="mr-1 text-xs font-medium text-slate-500">Count:</span>
+            <ScopeButton on={scope.kind === "sat"} onClick={() => setScope({ kind: "sat" })}>
+              Every quiz they sat
+            </ScopeButton>
+            <ScopeButton
+              on={scope.kind === "report"}
+              disabled={!selected.length}
+              onClick={() => setScope({ kind: "report" })}
+            >
+              {selected.length ? `The ${selected.length} in this report` : "The report above"}
+            </ScopeButton>
+            <ScopeButton
+              on={scope.kind === "custom"}
+              onClick={() => {
+                setScope({ kind: "custom", ids: scope.kind === "custom" ? scope.ids : [...scopedIds] });
+                setPicking(true);
+              }}
+            >
+              Chosen quizzes
+            </ScopeButton>
+            {scope.kind === "custom" && (
+              <button
+                onClick={() => setPicking((v) => !v)}
+                className="text-xs font-semibold text-blue-700 hover:underline"
+              >
+                {picking ? "Hide the list" : "Change which"}
+              </button>
+            )}
+          </div>
+
+          {scope.kind === "custom" && picking && (
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3 print:hidden">
+              <QuizPicker
+                quizzes={quizzes}
+                selected={scope.ids}
+                onChange={(ids) => setScope({ kind: "custom", ids })}
+                storageKey="quizzine.report.semesterview"
+                columns={1}
+                maxHeight="14rem"
+              />
+            </div>
+          )}
+
+          {!summary || !report ? (
+            <p className="mt-4 text-sm text-slate-500">
+              Nobody in {semester === null ? "that semester" : semLabel(semester)} has submitted to those
+              quizzes.
+            </p>
+          ) : (
+            <>
+              <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <p className="font-semibold text-slate-900">{semLabel(semester!)}</p>
+                  <p className="text-sm text-slate-500">
+                    {summary.students} student{summary.students === 1 ? "" : "s"} · {report.quizzes.length} quiz
+                    {report.quizzes.length === 1 ? "" : "zes"}
+                  </p>
+                </div>
+                {/* The same four figures as the semester cards at the top of the page. */}
+                <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <Stat label="Average" value={`${summary.average}%`} />
+                  <Stat label="Median" value={`${summary.median}%`} />
+                  <Stat label="Range" value={`${summary.worst}–${summary.best}%`} />
+                  <Stat label="Took part" value={`${summary.participation}%`} hint="of all sittings" />
+                </div>
+                <div className="mt-3 flex h-3 overflow-hidden rounded-full bg-slate-100">
+                  {summary.bandCounts.map(({ band, count }) => (
+                    <div
+                      key={band.label}
+                      className={BAR[band.color]}
+                      style={{ width: `${summary.students ? (count / summary.students) * 100 : 0}%` }}
+                      title={`${band.label}: ${count}`}
+                    />
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600">
+                  {summary.bandCounts.map(({ band, count }) => (
+                    <span key={band.label}>
+                      <span className={`inline-block h-2 w-2 rounded-full align-middle ${BAR[band.color]}`} />{" "}
+                      {band.label} {count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-center justify-between gap-3">
+                <h3 className="text-sm font-bold text-slate-900">The papers they sat</h3>
+                <select
+                  value={quizSort}
+                  onChange={(e) => setQuizSort(e.target.value as SemesterQuizSort)}
+                  aria-label="Sort the papers this semester sat"
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 print:hidden"
+                >
+                  {SEMESTER_QUIZ_SORTS.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="mt-2 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-xs text-slate-500">
+                    <tr>
+                      <th className="px-4 py-2.5">Quiz</th>
+                      <th className="px-3 py-2.5 text-right">Average</th>
+                      <th className="px-3 py-2.5 text-right">Median</th>
+                      <th className="px-3 py-2.5 text-right">Range</th>
+                      <th className="px-3 py-2.5 text-right">Sat</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {quizLines.map((line) => (
+                      <tr key={line.quiz.id} className="border-t border-slate-100">
+                        <td className="px-4 py-2.5">
+                          <span className="font-medium text-slate-900">{line.quiz.title}</span>
+                          <span className="ml-2 text-xs text-slate-400">
+                            {new Date(line.quiz.created_at).toLocaleDateString()}
+                          </span>
+                        </td>
+                        {line.sat ? (
+                          <>
+                            <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{line.average}%</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{line.median}%</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">
+                              {line.worst}–{line.best}%
+                            </td>
+                            <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">
+                              {line.sat}
+                              {line.missed > 0 && <span className="text-slate-400"> (+{line.missed} missed)</span>}
+                            </td>
+                          </>
+                        ) : (
+                          <td colSpan={4} className="px-3 py-2.5 text-right text-xs text-slate-400">
+                            nobody in this semester sat it
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-bold text-slate-900">
+                  The students
+                  <span className="ml-2 text-xs font-normal text-slate-500">
+                    {students.length} of {report.students.length}
+                  </span>
+                </h3>
+                <div className="flex flex-wrap gap-2 print:hidden">
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Find a student…"
+                    aria-label="Find a student in this semester"
+                    className="w-44 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <select
+                    value={studentSort}
+                    onChange={(e) => setStudentSort(e.target.value as StudentSort)}
+                    aria-label="Sort the students in this semester"
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700"
+                  >
+                    {STUDENT_SORTS.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="mt-2 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-xs text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2.5">Roll</th>
+                      <th className="px-3 py-2.5">Name</th>
+                      <th className="px-3 py-2.5 text-center">Sat</th>
+                      <th className="px-3 py-2.5 text-right">Overall</th>
+                      <th className="px-3 py-2.5">Band</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {students.map((s) => (
+                      <tr key={s.roll} className="border-t border-slate-100 hover:bg-slate-50">
+                        <td className="px-3 py-2.5 font-mono text-xs text-slate-700">{s.roll}</td>
+                        <td className="px-3 py-2.5 font-medium text-slate-900">{s.name}</td>
+                        <td className="px-3 py-2.5 text-center text-slate-600">
+                          {s.attempted}/{report.quizzes.length}
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{s.percent}%</td>
+                        <td className="px-3 py-2.5">
+                          <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${CHIP[s.band.color]}`}>
+                            {s.band.label}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    {students.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-4 text-sm text-slate-500">
+                          Nobody matches that.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

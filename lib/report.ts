@@ -209,7 +209,7 @@ function attemptPercent(a: ReportAttempt): number {
 }
 
 /** Everyone an attempt should be credited to — the group's whole team, or one student. */
-function participants(
+export function participants(
   a: ReportAttempt,
   aliases: AliasMap = {}
 ): { roll: string; name: string; semester: number }[] {

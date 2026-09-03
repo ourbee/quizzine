@@ -12,12 +12,14 @@ import * as XLSX from "xlsx";
 import { groupByDimension, type AnalyticsResult, type StudentProfile, type StudentTagRow } from "@/lib/analytics";
 import { semesterLabel } from "@/lib/normalize";
 import Logo from "@/components/Logo";
+import QuizPicker from "@/components/QuizPicker";
 
 interface QuizRow {
   id: string;
   title: string;
   created_at: string;
   responses: string | number;
+  accepting?: boolean;
 }
 
 /** Colour by how far a percentage sits from the pass mark, not by rank. */
@@ -252,26 +254,19 @@ export default function AnalyticsPage() {
         <p className="mt-1 text-sm text-slate-500">
           Pick the tests to pool. Only tagged, auto-marked questions can be counted.
         </p>
-        <div className="mt-3 max-h-56 space-y-1 overflow-y-auto">
-          {quizzes.map((z) => (
-            <label key={z.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
-              <input
-                type="checkbox"
-                checked={picked.has(z.id)}
-                onChange={(e) => {
-                  const next = new Set(picked);
-                  if (e.target.checked) next.add(z.id);
-                  else next.delete(z.id);
-                  setPicked(next);
-                  setResult(null);
-                }}
-                className="h-4 w-4"
-              />
-              <span className="flex-1 truncate text-slate-800">{z.title}</span>
-              <span className="shrink-0 text-xs text-slate-400">{z.responses} responses</span>
-            </label>
-          ))}
-          {!quizzes.length && <p className="text-sm text-slate-400">No quizzes yet.</p>}
+        <div className="mt-3">
+          <QuizPicker
+            quizzes={quizzes}
+            selected={[...picked]}
+            onChange={(ids) => {
+              setPicked(new Set(ids));
+              // The figures below were built from the old selection, so they stop
+              // describing what the page now says it is reporting on.
+              setResult(null);
+            }}
+            storageKey="quizzine.analytics.quizview"
+            maxHeight="18rem"
+          />
         </div>
 
         <div className="mt-4 flex flex-wrap items-end gap-4 border-t border-slate-100 pt-4 text-sm">
@@ -323,8 +318,8 @@ export default function AnalyticsPage() {
           </label>
         </div>
         <p className="mt-2 text-xs text-slate-500">
-          A topic with fewer than {minEvidence} questions behind it is reported as &ldquo;not enough evidence
-          yet&rdquo; rather than as a strength or a weakness. Two wrong answers out of three is noise, and planning a
+          A topic with fewer than {minEvidence} questions behind it{" "}
+          is reported as &ldquo;not enough evidence yet&rdquo; rather than as a strength or a weakness. Two wrong answers out of three is noise, and planning a
           term&apos;s teaching around it would be planning around nothing.
         </p>
 
